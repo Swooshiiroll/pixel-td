@@ -31,8 +31,8 @@ beacon) holds against enemies marching in from the map edge.
 
 **View**
 - Flat top-down, looking straight down.
-- Pixel-perfect: the world is drawn 1:1 and shown at a whole-number scale. The default zoom
-  shows 640x360 world pixels.
+- Pixel-perfect: the world is drawn 1:1 and shown at a whole-number scale. The view fills the
+  window, and the default zoom shows about 640x360 world pixels.
 - The map is bigger than the screen (about 3x2 screens). The camera pans and zooms in whole-number
   steps ([world.md](world.md)).
 - Placement grid: 12 px cells.

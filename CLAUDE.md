@@ -107,7 +107,8 @@ Logs go to `out/`.
   - **Grid:** 12 px placement cells. A light tower is 2x2 cells (24 px), a heavy tower 4x4
     (48 px), and the core 6x6 (72 px).
   - **Map:** 160x60 cells (1920x720 px).
-  - **Zoom:** whole-number steps; the default zoom shows 640x360. See `design/world.md`.
+  - **Zoom:** whole-number steps. The view fills the window, and the default zoom shows about
+    640x360. See `design/world.md`.
   - The engine skeleton still draws placeholder 32 px tiles until the map generator replaces
     them.
 - **Art is generated, not drawn by hand or downloaded:** sprites are original, authored by Claude.

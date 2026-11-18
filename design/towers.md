@@ -1,8 +1,10 @@
 # Tower system
 
-Status: **draft for the owner's review** (issue #3). Decided in the question rounds of 2026-11-18.
-Anything marked **Proposed** wasn't decided: it's a starting value or rule for the owner to
-confirm, and it's listed under Open questions.
+Status: **draft for the owner's review** (issue #3). Decided in the question rounds of 2026-11-18,
+and the open questions were reviewed with the owner the same day.
+
+Numbers marked **(start)** are starting values. They live in the live-tuning data file and get
+adjusted by feel in the test arena; nothing on a part is hard-coded.
 
 ## Purpose
 
@@ -26,48 +28,71 @@ Every tower is exactly **one chassis + one weapon + one module**, in three fixed
 | Part | What it decides |
 |---|---|
 | **Chassis** | Footprint and mount size (light or heavy), range, turn speed, and the tower's **evolution level cap** |
-| **Weapon** | How it hurts (examples: beam, shell, arc, pulse). It needs a mount size and is either **direct fire** or **lobbed** (line of sight, [world.md](world.md)) |
+| **Weapon** | How it hurts (examples: beam, shell, arc, pulse). It's light or heavy, and either **direct fire** or **lobbed** (line of sight, [world.md](world.md)) |
 | **Module** | The twist (examples: chains, slows, splits, pierces, overcharges). It fits any chassis |
 
-- **Mount sizes:** a light chassis takes light weapons and a heavy chassis takes heavy weapons.
-  The size is also the footprint: light is 2 x 2 cells (24 px) and heavy is 4 x 4 cells (48 px)
-  on the 12 px grid. Whether a heavy chassis can also take a light weapon is open.
-- The examples are placeholders. The real parts come from pitch and pick (see Designing parts).
+**Mount sizes:**
+
+| Chassis | Footprint | Takes |
+|---|---|---|
+| Light | 2 x 2 cells (24 px) | Light weapons |
+| Heavy | 4 x 4 cells (48 px) | Light **or** heavy weapons |
+
+The examples are placeholders. The real parts come from pitch and pick (see Designing parts).
 
 ### Getting towers in a run
 
+- **Starting kit:** every run begins with **1 light chassis, 1 light weapon and 1 module** in the
+  pool, so you can build before wave 1.
 - **The draft unlocks parts.** Between waves you draft a chassis, a weapon or a module into your
   run's **part pool**. Unlocked parts are reusable.
 - **Gold builds towers.** You build any legal combination of the parts in your pool, wherever
   there's legal ground ([world.md](world.md)).
-- **Proposed:** a tower's cost is the sum of its three parts' costs.
+- **Cost:** a tower costs **the sum of its three parts' costs** (each part's cost is **(start)**).
 
 ### After a tower is built
 
 - **The chassis and weapon are permanent.**
-- **The module can be swapped** for another one in your pool, for a gold cost.
+- **The module can be swapped** for another one in your pool, for a gold cost **(start)**.
   - The tower **keeps its XP and level**.
   - The new module starts at Mk I.
-  - The gold spent on the old module's Mk upgrades is **partly refunded** (**Proposed:** 50%).
+  - 50% **(start)** of the gold spent on the old module's Mk upgrades is refunded.
+- **Selling:**
+  - A tower can be sold for part of what was spent on it (its parts plus its Mk upgrades). The
+    share is **(start)**.
+  - Its XP is lost.
 
 ### Evolution (stats only)
 
 - **XP = damage dealt.**
-- **The stat that grows follows how the damage was dealt.** For example:
-  - damage to armoured targets raises penetration;
-  - damage at long range raises range;
-  - damage to many targets at once raises effect strength.
-  - **Proposed:** each kind of damage feeds a "lean" counter, and each level-up raises the stat
-    with the biggest lean.
-- A meter on the tower shows which way it's leaning.
-- Evolution never changes behaviour: that's the parts' job.
-- **The chassis sets the level cap.** For example, a light chassis caps early and a heavy one goes
-  higher.
+- **Five stats can grow:**
+  - **damage**;
+  - **fire rate**, which includes turn speed;
+  - **range**;
+  - **penetration**;
+  - **effect strength**: the module's twist, such as chain count, slow % or split count.
+- **The lean:** each point of damage feeds one stat's counter, depending on the situation.
+  - Damage to an armoured target feeds penetration.
+  - A hit in the outer third of the tower's range feeds range.
+  - A hit on a fast enemy feeds fire rate.
+  - Part of a hit on 2+ enemies (chain, split or area) feeds effect strength.
+  - Anything else feeds damage.
+  - If several situations apply, the damage is split equally between them.
+  - What counts as "armoured", "fast" and "outer third" is **(start)**.
+- **Level-up:**
+  - **The biggest counter wins.** That stat gets the whole boost, and all counters reset.
+  - The size of each boost is **(start)**.
+- **Lean meter:** a meter on the tower shows the counters, so you can see where it's leaning.
+- **Behaviour:** evolution never changes it. That's the parts' job.
+- **Level cap:**
+  - **The chassis sets it.** For example, a light chassis caps early and a heavy one goes higher.
+  - The XP curve and the caps are **(start)**.
+  - **At the cap,** the tower stops gaining XP. Anything past the cap is lost.
 
 ### Gold Mk upgrades (per tower)
 
 - Gold upgrades **one placed tower's weapon or module**. The chassis isn't upgraded.
-- Each weapon and each module has **three steps**:
+- Each weapon and each module has **three steps**, with costs **(start)**:
 
 | Step | What it is |
 |---|---|
@@ -77,6 +102,16 @@ Every tower is exactly **one chassis + one weapon + one module**, in three fixed
 
 - Mk II and III don't need to change the sprite, and names don't need to share a vocabulary.
   Bastion Line's visible-rebuild rule doesn't apply here.
+
+### Sprites
+
+Towers are **assembled from part sprites**:
+- the chassis is the base;
+- the weapon is a turret on top that rotates to aim;
+- the module is a small add-on.
+
+The game stacks them, so art grows with the number of parts, not combinations. Mk IV redraws only
+the part it upgrades.
 
 ### Designing parts
 
@@ -90,61 +125,71 @@ Every tower is exactly **one chassis + one weapon + one module**, in three fixed
 ## Interactions
 
 - **World ([world.md](world.md)):**
-  - footprints on the 12 px grid;
+  - footprints on the 12 px grid, never straddling heights;
   - high ground gives range and fires over rocks;
   - lobbed weapons arc over rocks;
-  - cliffs block everything.
-- **Economy:** gold pays for building, module swaps and Mk upgrades. Income and prices are open.
-- **Draft:** the draft offers parts. How many choices it offers, and how often, belong to the
-  run-loop design.
-- **Live tuning:** every number on a part (stats, costs, lean rules, level caps) lives in the
-  hot-reloaded data file. Nothing is hard-coded.
+  - cliffs block everything;
+  - towers reveal fog within their range.
+- **Economy:** gold pays for building, module swaps and Mk upgrades. Selling and swaps refund part
+  of it. Income is open (see [game.md](game.md)).
+- **Draft:** the draft offers parts, starting from the kit. How many choices it offers, and how
+  often, belong to the run-loop design.
+- **Live tuning:** every number on a part lives in the hot-reloaded data file:
+  - stats and costs;
+  - lean thresholds;
+  - boost sizes;
+  - XP curve and level caps;
+  - refund shares.
 
 ## UI
 
-- **Build menu:** pick a chassis, a weapon and a module from the pool. A preview shows the
-  footprint, the range (with the high-ground bonus) and the total cost.
+- **Build menu:** pick a chassis, a weapon and a module from the pool.
+  - A preview shows the footprint, the range (with the high-ground bonus) and the total cost.
+  - Weapons that don't fit the chassis are greyed out.
 - **Tower panel:**
   - the three parts with their Mk levels;
   - level and XP, the lean meter and the cap;
   - Mk upgrade buttons (weapon, module);
-  - Swap module.
+  - Swap module and Sell, each showing its refund.
 
 ## Edge cases
 
-- **A weapon that doesn't fit the chassis's mount size** can't be picked for it. The menu greys it
-  out.
+- **A heavy weapon on a light chassis** can't be picked. The menu greys it out.
 - **Swapping to the same module** isn't offered.
-- **A tower at its level cap** stops levelling. **Proposed:** XP earned at the cap isn't banked.
-- **The pool only has heavy weapons and only light chassis.** You can't build until the draft gives
-  you a fit. **Proposed:** the draft guarantees at least one legal combination early on.
+- **A tower at its level cap** stops gaining XP. The lean meter freezes.
+- **The pool never leaves you unable to build:** the starting kit is always one legal light tower.
 
 ## Scope
 
 - **v0.1:**
-  - the part model;
+  - the part model and the starting kit;
   - building from the pool;
-  - module swaps;
+  - module swaps and selling;
   - evolution;
   - Mk II–IV;
-  - a first small set of parts, made by pitch and pick and tuned in the arena.
+  - **8 parts: 2 chassis (1 light, 1 heavy), 3 weapons and 3 modules**, made by pitch and pick
+    and tuned in the arena.
 - **Later:** more parts each version.
 - **Out:** synergy tags, fixed (non-modular) towers, and changing a tower's chassis or weapon.
 
 ## Acceptance (what the tests check)
 
 - **Assembly:**
-  - mount-size rules;
-  - footprint from the chassis;
-  - stats combined from the three parts.
+  - a light chassis rejects heavy weapons, and a heavy chassis takes both;
+  - the footprint comes from the chassis;
+  - stats are combined from the three parts;
+  - the cost is the sum of the parts.
+- **Starting kit:** the pool at run start holds a legal light tower.
 - **Module swap:**
   - XP and level are kept;
   - the new module is at Mk I;
   - the refund is the right share.
+- **Selling:** the refund is the right share of parts plus Mk spend.
 - **Evolution:**
   - XP equals damage dealt;
-  - the lean picks the right stat for each kind of damage;
-  - the cap stops levelling;
+  - each situation feeds the right counter, and shared situations split equally;
+  - the biggest counter wins and the counters reset;
+  - the cap stops XP;
   - stats only, with no behaviour change.
 - **Mk:**
   - three steps on the weapon and the module;
@@ -154,18 +199,8 @@ Every tower is exactly **one chassis + one weapon + one module**, in three fixed
 
 ## Open questions
 
-1. Which stats exist, and the exact lean rules, i.e. which kind of damage feeds which stat
-   (Proposed: biggest lean wins).
-2. The XP curve and each chassis's level cap.
-3. Costs:
-   - parts (Proposed: tower cost = sum of parts);
-   - module swaps;
-   - Mk steps;
-   - the refund share (Proposed 50%).
-4. Selling towers: is it allowed, and what's refunded?
-5. What happens to XP earned at the cap (Proposed: not banked).
-6. Does the draft guarantee a buildable combination (Proposed: yes, early on)?
-7. Sprites: does the game assemble a tower's sprite from its part sprites, or is every
-   combination drawn?
-8. How many parts v0.1 starts with.
-9. Can a heavy chassis also mount a light weapon?
+1. The 8 v0.1 parts themselves, including which weapons are light or heavy and what goes in the
+   starting kit. These come from the pitch-and-pick rounds.
+
+Everything else from the first draft was settled with the owner on 2026-11-18. The remaining
+numbers are **(start)** values to tune in the arena.
