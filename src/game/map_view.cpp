@@ -1,0 +1,188 @@
+#include "game/map_view.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+
+namespace pixeltd::game {
+namespace {
+
+struct Rgb {
+    int r = 0;
+    int g = 0;
+    int b = 0;
+};
+
+constexpr Rgb shade(Rgb c, int d) noexcept {
+    return {std::clamp(c.r + d, 0, 255), std::clamp(c.g + d, 0, 255), std::clamp(c.b + d, 0, 255)};
+}
+
+// Placeholder palette (dusty planet surface) until the style board picks the art direction.
+constexpr Rgb kGround{78, 58, 46};
+constexpr Rgb kHigh{150, 114, 80};
+constexpr Rgb kHighRim{184, 146, 104};
+constexpr Rgb kHighFace{98, 72, 54};
+constexpr Rgb kRock{126, 122, 132};
+constexpr Rgb kRockEdge{70, 66, 78};
+constexpr Rgb kCliff{50, 48, 64};
+constexpr Rgb kCliffTop{88, 86, 106};
+
+// Cheap integer hash for per-cell and per-pixel variation (looks only; not part of the sim).
+constexpr std::uint32_t mix(std::uint32_t x, std::uint32_t y) noexcept {
+    std::uint32_t h = x * 73856093u ^ y * 19349663u;
+    h ^= h >> 13u;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15u;
+    return h;
+}
+
+Rgb pixel_colour(const Grid<Terrain>& t, int cx, int cy, int px, int py) {
+    const Terrain here = t.at(cx, cy);
+    const auto at = [&](int dx, int dy) {
+        return t.in_bounds(cx + dx, cy + dy) ? t.at(cx + dx, cy + dy) : here;
+    };
+    const int cell_var =
+        static_cast<int>(mix(static_cast<std::uint32_t>(cx), static_cast<std::uint32_t>(cy)) % 7u) -
+        3;
+    const std::uint32_t grain = mix(static_cast<std::uint32_t>(cx * kCellPx + px),
+                                    static_cast<std::uint32_t>(cy * kCellPx + py));
+    const int last = kCellPx - 1;
+
+    switch (here) {
+    case Terrain::Ground: {
+        Rgb c = shade(kGround, cell_var);
+        if (px == 0 || py == 0) {
+            c = shade(c, -5); // faint 12 px grid
+        }
+        if (grain % 23u == 0u) {
+            c = shade(c, 7);
+        }
+        // Shadows cast down onto low ground by plateaus and cliffs.
+        if (at(0, -1) == Terrain::High && py < 3) {
+            c = shade(c, -22);
+        } else if (at(0, -1) == Terrain::Cliff && py < 4) {
+            c = shade(c, -26);
+        }
+        return c;
+    }
+    case Terrain::High: {
+        Rgb c = shade(kHigh, cell_var);
+        if (grain % 29u == 0u) {
+            c = shade(c, -8);
+        }
+        if (at(0, -1) != Terrain::High && py < 2) {
+            c = kHighRim;
+        } else if (at(0, 1) != Terrain::High && py >= last - 2) {
+            c = kHighFace; // the plateau's south face
+        } else if ((at(-1, 0) != Terrain::High && px == 0) ||
+                   (at(1, 0) != Terrain::High && px == last)) {
+            c = shade(c, -18);
+        }
+        return c;
+    }
+    case Terrain::Rock: {
+        Rgb c = shade(kRock, cell_var);
+        if ((at(-1, 0) != Terrain::Rock && px == 0) || (at(1, 0) != Terrain::Rock && px == last) ||
+            (at(0, -1) != Terrain::Rock && py == 0) || (at(0, 1) != Terrain::Rock && py == last)) {
+            c = kRockEdge;
+        } else if (px >= 2 && px <= 4 && py >= 2 && py <= 3) {
+            c = shade(c, 28);
+        } else if (grain % 5u == 0u) {
+            c = shade(c, -10);
+        }
+        return c;
+    }
+    case Terrain::Cliff: {
+        Rgb c = shade(kCliff, cell_var + static_cast<int>(grain % 9u) - 4);
+        if (at(0, -1) != Terrain::Cliff && py < 3) {
+            c = kCliffTop;
+        } else if (at(0, 1) != Terrain::Cliff && py >= last - 1) {
+            c = shade(c, -14);
+        }
+        return c;
+    }
+    }
+    return kGround;
+}
+
+} // namespace
+
+MapView::MapView(SDL_Renderer* renderer)
+    : renderer_(renderer),
+      pixels_(static_cast<std::size_t>(kMapPxW) * static_cast<std::size_t>(kMapPxH) * 4u, 0) {}
+
+MapView::~MapView() {
+    if (terrain_ != nullptr) {
+        SDL_DestroyTexture(terrain_);
+    }
+}
+
+bool MapView::set_map(const Map& map) {
+    if (terrain_ == nullptr) {
+        terrain_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
+                                     kMapPxW, kMapPxH);
+        if (terrain_ == nullptr) {
+            SDL_Log("terrain texture failed: %s", SDL_GetError());
+            return false;
+        }
+        SDL_SetTextureScaleMode(terrain_, SDL_SCALEMODE_NEAREST);
+    }
+    for (int cy = 0; cy < kMapH; ++cy) {
+        for (int cx = 0; cx < kMapW; ++cx) {
+            for (int py = 0; py < kCellPx; ++py) {
+                const std::size_t row =
+                    static_cast<std::size_t>(cy * kCellPx + py) * static_cast<std::size_t>(kMapPxW);
+                for (int px = 0; px < kCellPx; ++px) {
+                    const Rgb c = pixel_colour(map.terrain, cx, cy, px, py);
+                    const std::size_t i = (row + static_cast<std::size_t>(cx * kCellPx + px)) * 4u;
+                    pixels_[i + 0] = static_cast<std::uint8_t>(c.r);
+                    pixels_[i + 1] = static_cast<std::uint8_t>(c.g);
+                    pixels_[i + 2] = static_cast<std::uint8_t>(c.b);
+                    pixels_[i + 3] = 255;
+                }
+            }
+        }
+    }
+    zone_ = map.zone;
+    if (!SDL_UpdateTexture(terrain_, nullptr, pixels_.data(), kMapPxW * 4)) {
+        SDL_Log("terrain upload failed: %s", SDL_GetError());
+        return false;
+    }
+    return true;
+}
+
+void MapView::draw(CameraPos cam, ViewSize view) const {
+    // The part of the terrain texture under the camera. When the view is bigger than the map
+    // (centred, so the camera is negative), clip the source and shift the destination to match.
+    SDL_FRect src{static_cast<float>(cam.x), static_cast<float>(cam.y), static_cast<float>(view.w),
+                  static_cast<float>(view.h)};
+    SDL_FRect dst{0.0f, 0.0f, src.w, src.h};
+    if (src.x < 0.0f) {
+        dst.x = -src.x;
+        src.w += src.x;
+        src.x = 0.0f;
+    }
+    if (src.y < 0.0f) {
+        dst.y = -src.y;
+        src.h += src.y;
+        src.y = 0.0f;
+    }
+    src.w = std::min(src.w, static_cast<float>(kMapPxW) - src.x);
+    src.h = std::min(src.h, static_cast<float>(kMapPxH) - src.y);
+    dst.w = src.w;
+    dst.h = src.h;
+    SDL_RenderTexture(renderer_, terrain_, &src, &dst);
+
+    // The core zone: a light tint and an outline.
+    const SDL_FRect zone{static_cast<float>(zone_.x * kCellPx - cam.x),
+                         static_cast<float>(zone_.y * kCellPx - cam.y),
+                         static_cast<float>(zone_.w * kCellPx),
+                         static_cast<float>(zone_.h * kCellPx)};
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 90, 220, 255, 34);
+    SDL_RenderFillRect(renderer_, &zone);
+    SDL_SetRenderDrawColor(renderer_, 90, 220, 255, 230);
+    SDL_RenderRect(renderer_, &zone);
+}
+
+} // namespace pixeltd::game
