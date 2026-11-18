@@ -5,8 +5,8 @@ SDL3 and CMake. Two people work on it: the owner, who decides and tests, and Cla
 implements.
 
 - Repo: https://github.com/Swooshiiroll/pixel-td
-- Board: {{BOARD_URL}}
-- Workflow page: {{DOC_URL}}
+- Board: https://github.com/users/Swooshiiroll/projects/4
+- Workflow page: https://claude.ai/artifact/T4JxzLByN4q8NrNfB8byrX
 
 ## Models
 
@@ -64,7 +64,7 @@ with the owner before writing any code.
    - Put `Closes #<issue>` in it.
    - Add a line to `CHANGELOG.md` under Unreleased.
 5. **Wait for CI:** `gh pr checks --watch`. Then give the owner the test-build link: the run's
-   Artifacts, `pixel-td-<branch>-<sha>`.
+   Artifacts, `pixel-td-<platform>-<branch>-<sha>`.
 6. **Merge only when the owner says so:** `gh pr merge --squash --delete-branch`.
 
 **Releasing:**

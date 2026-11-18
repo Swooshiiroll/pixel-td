@@ -4,8 +4,8 @@ An endless roguelite tower defense game with retro-futuristic pixel art, written
 
 ## Development
 
-How work is planned, built, tested and released: [workflow page]({{DOC_URL}}) and `CLAUDE.md`.
-Board: {{BOARD_URL}}
+How work is planned, built, tested and released: [workflow page](https://claude.ai/artifact/T4JxzLByN4q8NrNfB8byrX) and `CLAUDE.md`.
+Board: https://github.com/users/Swooshiiroll/projects/4
 
 ```sh
 tools/dev.sh setup   # once: configures CMake in out/cmake, downloads SDL3 + doctest (pinned)
