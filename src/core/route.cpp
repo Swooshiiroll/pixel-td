@@ -633,11 +633,23 @@ class Planner {
             const int key = (roam == closer ? 2 : 0) + (d == dir_in ? 0 : 1);
             steps[static_cast<std::size_t>(count++)] = {v, d, key, rng_.next_u32()};
         }
-        std::sort(steps.begin(), steps.begin() + count, [](const Step& a, const Step& b) {
+        // Best first: an insertion sort over at most 4 steps (std::sort over a part of the array
+        // trips GCC's array-bounds analysis).
+        const auto before = [](const Step& a, const Step& b) {
             return a.key != b.key   ? a.key < b.key
                    : a.tie != b.tie ? a.tie < b.tie
                                     : a.node < b.node;
-        });
+        };
+        const std::size_t n = static_cast<std::size_t>(std::min(count, 4));
+        for (std::size_t i = 1; i < n; ++i) {
+            const Step s = steps[i];
+            std::size_t j = i;
+            while (j > 0 && before(s, steps[j - 1])) {
+                steps[j] = steps[j - 1];
+                --j;
+            }
+            steps[j] = s;
+        }
         for (int i = 0; i < count && !done_; ++i) {
             const Step& s = steps[static_cast<std::size_t>(i)];
             const int step_len = static_cast<int>(lat_.link(u, s.node)->size()) + 1;
