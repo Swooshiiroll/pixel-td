@@ -109,8 +109,16 @@ Logs go to `out/`.
   - **Map:** 160x60 cells (1920x720 px).
   - **Zoom:** whole-number steps. The view fills the window, and the default zoom shows about
     640x360. See `design/world.md`.
-  - The engine skeleton still draws placeholder 32 px tiles until the map generator replaces
-    them.
+  - **Pure maths stays in `src/core`.** That covers `core/camera.hpp`, and the front end only
+    feeds it window sizes.
+- **Map generation is deterministic across compilers.**
+  - Integer maths only: no floats, no `sqrt`.
+  - Randomness comes only from `pixeltd::Rng`, with sub-seeds derived by `splitmix64` and fixed
+    stream constants.
+  - Orderings are fixed (BFS queues; full tie-break keys for priority queues).
+  - The golden-hash tests pin results on MSVC and GCC. If you change the generator on purpose,
+    update the hashes in the same pull request and say why.
+  - Every generator number lives in `GenParams` as a (start) value.
 - **Art is generated, not drawn by hand or downloaded:** sprites are original, authored by Claude.
 - **Dependencies are pinned** (SDL3 3.4.18 and doctest 2.5.3 by release URL + SHA256 in
   `CMakeLists.txt`). Upgrade deliberately, in their own PR.

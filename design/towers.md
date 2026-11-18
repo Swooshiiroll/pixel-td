@@ -129,7 +129,8 @@ the part it upgrades.
   - high ground gives range and fires over rocks;
   - lobbed weapons arc over rocks;
   - cliffs block everything;
-  - towers reveal fog within their range.
+  - towers explore fog within their range, by direct sight. That includes lobbed towers, which
+    need a spotter to hit enemies behind rocks.
 - **Economy:** gold pays for building, module swaps and Mk upgrades. Selling and swaps refund part
   of it. Income is open (see [game.md](game.md)).
 - **Draft:** the draft offers parts, starting from the kit. How many choices it offers, and how

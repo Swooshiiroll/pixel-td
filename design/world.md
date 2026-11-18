@@ -1,7 +1,8 @@
 # World layout and map generator
 
-Status: **draft for the owner's review** (issue #3). Decided in the question rounds of 2026-11-18,
-and the open questions were reviewed with the owner the same day.
+Status: **confirmed by the owner** (PR #4, 2026-11-18). The decisions from the generator's
+planning round the same day are folded in (issue #5): fog as explored ground, sight always direct,
+one zoom step in, and the developer tools.
 
 Numbers marked **(start)** are starting values. They live in the live-tuning data file and get
 adjusted by feel in the test arena; the owner chose this over settling them on paper.
@@ -90,6 +91,8 @@ There's no terrain that affects enemies and no resource deposits.
 - **Low ground only.** The path never crosses high ground, rocks or cliffs.
   - **The one exception:** if the core is on high ground, the path's last stretch climbs a
     generated ramp up to it. That's all a high-ground core does: it changes nothing else.
+  - The ramp stays within 6 cells of the core **(start)**, so it's always inside the area explored
+    when you confirm the core.
 - **Shape varies by seed:** some maps wind with switchbacks and others run fairly direct, always
   within a fair length range of 1.5 to 2.5 times the map's width, measured along the path
   **(start)**.
@@ -110,14 +113,26 @@ There's no terrain that affects enemies and no resource deposits.
 
 ### Visibility (fog)
 
-- **The terrain is always visible.** Only the path and the spawn edge can be fogged.
-- **Revealing the path:**
-  - When you confirm the core, the path within one light tower's range of the core is revealed.
-  - After that, any path inside a tower's range, with line of sight, is revealed.
-  - Enemies walking a stretch **don't** reveal it.
-- **Revealed for good:** once a path cell is revealed it stays revealed, even if the tower that
-  saw it is sold.
-- **Enemies are hidden in fog.** You see an enemy once it enters revealed path.
+Fog works as **explored ground**, as the owner chose on 2026-11-18.
+
+- **The terrain is always visible.** You can always see where the ground, plateaus, rocks and
+  cliffs are.
+- **Unexplored low ground has a light haze.** Path under the haze is drawn as plain ground, so you
+  can see where you haven't looked, but not where the path runs there.
+  - Only low ground is hazed, because the path never runs on high ground except the ramp, and the
+    ramp is always explored from the start.
+- **Exploring:** every cell in sight gets explored, not only path.
+  - **When you confirm the core,** every cell within one light tower's range of the core is
+    explored. Until towers define their range, that's 6 cells, measured from the nearest core cell
+    **(start)**.
+  - **After that,** every cell inside a tower's range that the tower can see is explored.
+  - **Sight is always direct line of sight for the tower's height,** even for lobbed weapons. A
+    lobbed tower behind rocks can hit what it can't see, but only once another tower, or high
+    ground, has explored it for it: artillery needs a spotter.
+  - Enemies walking a stretch **don't** explore it.
+- **Explored for good:** once a cell is explored it stays explored, even if the tower that saw it
+  is sold.
+- **Enemies are hidden on unexplored cells.** You see an enemy once it walks onto explored ground.
 
 ### Camera
 
@@ -128,14 +143,32 @@ There's no terrain that affects enemies and no resource deposits.
     example, 3x on 1920x1080 gives exactly 640x360, and 2x on 1366x768 gives 683x384.
   - **Zooming out** stops at the last step whose view still fits inside the map. Nothing outside
     the map is ever shown. On 1080p that's 2x, which shows 960x540.
+  - **Zooming in** goes one step closer than the default: 4x on 1080p, which shows 480x270.
+  - For very wide or tall windows, the default steps in until its view fits inside the map.
+  - **Controls:** the mouse wheel zooms about the cursor, and + and - zoom about the centre of the
+    screen.
+
+### Developer tools
+
+These exist for building and reviewing the generator. **Normal runs stay random-only**: these
+are launch flags and keys for development, not settings in the game.
+
+- `--seed N` generates the map from seed N (decimal, or hex with `0x`).
+- **F5** makes a new map from a new random seed.
+- The **HUD** shows the seed, the zoom, the generation time, and the cell under the cursor.
+- `--map-shot file.bmp` saves the whole 1920x720 map as an image, then exits.
+- `--core auto` (with the core placement work) places the core automatically, for smoke runs and
+  map shots.
+
+The test arena will get proper seed entry later.
 
 ## Interactions
 
 - **Towers ([towers.md](towers.md)):**
   - Footprints use this grid.
   - High ground and line of sight affect range and targeting.
-  - Whether a weapon is lobbed is a trait of the part.
-  - Towers reveal fog.
+  - Whether a weapon is lobbed is a trait of the part, but sight is always direct.
+  - Towers explore fog within their range and sight.
 - **Test arena:** uses this generator, with a seed you type in. It's the first thing built on top
   of it.
 - **Saved data:** none in v0.1. There's no save or load yet. A map is fully rebuilt from (seed,
@@ -148,7 +181,8 @@ There's no terrain that affects enemies and no resource deposits.
   - A ghost of the core snaps to the 12 px grid and is coloured by whether that spot is legal.
   - A confirm control starts stage 2.
 - **After confirming:**
-  - The path near the core appears, and the rest is under fog.
+  - The ground around the core is explored, so the nearby path appears. Unexplored low ground
+    elsewhere stays under the haze.
   - The camera starts centred on the core.
 - **Range preview:**
   - While you place a tower, its range circle includes the high-ground bonus.
@@ -206,18 +240,23 @@ All in `src/core`, headless, in doctest:
   - legal and illegal placements (path, blocker, core, straddling heights, off-map);
   - the high-ground bonus only on high ground.
 - **Fog:**
-  - the reveal around the core at confirm;
-  - reveal by a tower in range with line of sight;
-  - no reveal by an enemy walking;
-  - revealed cells stay revealed after a sale;
-  - enemies in fog are not visible.
-- **Camera:** default and zoom-out steps for 1920x1080, 1366x768 and 2560x1440.
+  - exploring around the core at confirm, which covers the ramp;
+  - exploring by a tower in range with direct sight, including a lobbed tower that can't see past
+    rocks;
+  - no exploring by an enemy walking;
+  - explored cells stay explored after a sale;
+  - enemies on unexplored cells are not visible.
+- **Camera:** the default, zoom-out and zoom-in steps for 1920x1080, 1366x768 and 2560x1440, plus
+  small and very wide windows.
 - **Performance:** measure the time per stage.
   - **Proposed** target: under 50 ms per stage in a Release build on ANODE-MGMT.
 
 ## Open questions
 
 1. The performance target for generation (Proposed: under 50 ms per stage).
+2. For the arena or tower round: placing a tower on unexplored ground that hides path would be
+   refused, which gives away that the path runs there. Should building on unexplored ground be
+   allowed, refused, or allowed with that leak accepted?
 
 Everything else from the first draft was settled with the owner on 2026-11-18. The remaining
 numbers are **(start)** values to tune in the arena.
