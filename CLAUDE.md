@@ -102,8 +102,14 @@ Logs go to `out/`.
   unit tests link. Rendering, input and windows live in `src/game`.
 - **Determinism:** gameplay randomness comes only from `pixeltd::Rng` seeded per run; the sim
   advances in fixed 60 Hz ticks (`FixedStep`). Never use wall-clock time or `rand()` in the sim.
-- **Pixel-perfect view:** draw into the 640x360 render target with 32 px tiles; the window shows it
-  at a whole-number scale. Don't draw at window resolution.
+- **Pixel-perfect view:** the world is drawn 1:1 in world pixels into a render target. The window
+  shows it at a whole-number scale, and you never draw at a fractional scale.
+  - **Grid:** 12 px placement cells. A light tower is 2x2 cells (24 px), a heavy tower 4x4
+    (48 px), and the core 6x6 (72 px).
+  - **Map:** 160x60 cells (1920x720 px).
+  - **Zoom:** whole-number steps; the default zoom shows 640x360. See `design/world.md`.
+  - The engine skeleton still draws placeholder 32 px tiles until the map generator replaces
+    them.
 - **Art is generated, not drawn by hand or downloaded:** sprites are original, authored by Claude.
 - **Dependencies are pinned** (SDL3 3.4.18 and doctest 2.5.3 by release URL + SHA256 in
   `CMakeLists.txt`). Upgrade deliberately, in their own PR.
@@ -113,3 +119,20 @@ Logs go to `out/`.
   logs the chosen backend at start.
 - **Smoke run:** `out/stage/pixel-td/PixelTD.exe --frames 120 --screenshot <file>.bmp` renders and
   saves the 640x360 view, then exits.
+- **Copies to the owner's devices.** The owner reviews and plays on other machines. Copies never
+  overwrite: each delivery is a new file or folder. Check every copy's SHA256 afterwards.
+  - **Design docs** (`design/*.md`, plus any HTML pages or style-board exports):
+    - **Apollyon:** always, to `C:\Users\_Swooshii\Documents\Pixel TD`. Reach it with
+      `ssh apollyon`; the remote shell is cmd.exe, so chain with `&`. Check with `certutil -hashfile`.
+    - **Corundum-LX:** whenever it's up (`ssh -o ConnectTimeout=8 swooshii@corundum-lx`), to
+      `~/Documents/Pixel TD Design`. If it's down, say the copy is owed.
+    - **Names:** versioned, `Pixel TD - <Doc> (vN YYYY-MM-DD).md`.
+    - **Review:** the owner may annotate a copy in place. Fetch the latest copy back and diff it
+      against git to read the review.
+  - **Linux test builds:** after every build, to LX
+    `~/Documents/Pixel TD Testing/<YYYY-MM-DD> <HHMM> <branch with / as -> (<commit>)/`, with a
+    `BUILD.txt` giving the branch, commit, version and date.
+    - Linux can't be built here, so use the CI run's Linux artifact (`gh run download`).
+    - Copy with tar over ssh, because scp mangles the spaces in the path.
+  - **Windows builds:** to Apollyon `Documents\Pixel TD Testing\...`, the same way, when the owner
+    says they're playing there.
