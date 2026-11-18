@@ -57,8 +57,9 @@ struct GenParams {
     int separation = 5;    // the route keeps this far (cells) from the core once it has left it
     int stretch_gap = 3;   // cells between two stretches of the path that are far apart along it
     int stretch_span = 20; // spine cells apart along the path that make two stretches "far apart"
-    int light_range_cells = 6; // light-tower range until towers define it
-    int build_window = 10;     // every this many spine cells need a light-tower spot in range
+    int light_range_cells = 6;      // light-tower range until towers define it
+    int high_ground_bonus_pct = 25; // range bonus on high ground (moves to tower data later)
+    int build_window = 10;          // every this many spine cells need a light-tower spot in range
 
     // --- Retries.
     int stage1_attempts = 64; // then the known-safe fallback layout
