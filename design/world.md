@@ -157,8 +157,13 @@ are launch flags and keys for development, not settings in the game.
 - **F5** makes a new map from a new random seed.
 - The **HUD** shows the seed, the zoom, the generation time, and the cell under the cursor.
 - `--map-shot file.bmp` saves the whole 1920x720 map as an image, then exits.
-- `--core auto` (with the core placement work) places the core automatically, for smoke runs and
-  map shots.
+- `--core auto` places the core at the zone's most central legal spot, for smoke runs and map
+  shots. Map shots show the whole map explored, so the full route is visible.
+- **P** toggles the **probe**: a stand-in light tower until the arena has towers.
+  - While it's on, the cursor shows a 2x2 probe, its range circle (with the high-ground bonus),
+    and shaded cells it can't see.
+  - A click places it on a legal light-tower spot, and it explores fog like a tower would.
+- `--probe X,Y` (with `--core auto`, repeatable) places probes at start, for smoke runs.
 
 The test arena will get proper seed entry later.
 
@@ -253,7 +258,9 @@ All in `src/core`, headless, in doctest:
 
 ## Open questions
 
-1. The performance target for generation (Proposed: under 50 ms per stage).
+1. The performance target for generation (Proposed: under 50 ms per stage). Measured in Release
+   on ANODE-MGMT: stage 1 about 2 ms on average (11 ms worst), stage 2 about 2 ms (28 ms worst over
+   4,940 routes), and exploring fog well under 1 ms.
 2. For the arena or tower round: placing a tower on unexplored ground that hides path would be
    refused, which gives away that the path runs there. Should building on unexplored ground be
    allowed, refused, or allowed with that leak accepted?
