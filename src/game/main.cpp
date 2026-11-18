@@ -2,14 +2,16 @@
 // where the scale is a whole number, then shown at that scale: pixels stay square and crisp at
 // every zoom step, and the view always fills the window (design/world.md, Camera).
 //
-//   PixelTD [--seed N] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
+//   PixelTD [--seed N] [--core auto] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
+//     --core auto       developer tool: place the core at the zone's most central legal spot
 //     --map-shot F      developer tool: save the whole 1920x720 map to F (BMP), then exit
 //     --frames N        quit after N frames (smoke tests)
 //     --screenshot F    with --frames: save the last view frame to F (BMP)
 //
-// Controls: pan with WASD / arrows / the window edges / right-drag; zoom with the mouse wheel or
-// + and -; F5 makes a new random map (developer tool); Esc quits.
+// Controls: left-click inside the zone places the core (the path is generated then); pan with
+// WASD / arrows / the window edges / right-drag; zoom with the mouse wheel or + and -; F5 makes a
+// new random map (developer tool); Esc quits.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -19,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 
 #include "core/camera.hpp"
 #include "core/fixed_step.hpp"
@@ -45,6 +48,7 @@ struct Options {
     const char* map_shot = nullptr;
     bool has_seed = false;
     std::uint64_t seed = 0;
+    bool core_auto = false;
 };
 
 bool parse_options(int argc, char** argv, Options& out) {
@@ -56,6 +60,10 @@ bool parse_options(int argc, char** argv, Options& out) {
             out.screenshot = argv[++i];
         } else if (std::strcmp(argv[i], "--map-shot") == 0 && has_value) {
             out.map_shot = argv[++i];
+        } else if (std::strcmp(argv[i], "--core") == 0 && has_value &&
+                   std::strcmp(argv[i + 1], "auto") == 0) {
+            out.core_auto = true;
+            ++i;
         } else if (std::strcmp(argv[i], "--seed") == 0 && has_value) {
             char* end = nullptr;
             out.seed = std::strtoull(argv[++i], &end, 0);
@@ -81,7 +89,8 @@ std::uint64_t random_seed() {
 struct World {
     Map map;
     GenParams params;
-    double gen_ms = 0.0;
+    double gen_ms = 0.0;   // stage 1
+    double route_ms = 0.0; // stage 2
 };
 
 bool new_map(World& world, MapView& view, std::uint64_t seed) {
@@ -93,6 +102,28 @@ bool new_map(World& world, MapView& view, std::uint64_t seed) {
             static_cast<unsigned long long>(seed), world.gen_ms, s.stage1_attempts, s.zone_tries,
             s.stage1_fallback ? ", FALLBACK" : "");
     return view.set_map(world.map);
+}
+
+// Places the core at `spot` and generates the spawn and path (stage 2). False if the spot isn't
+// legal or the view couldn't be updated.
+bool place_core(World& world, MapView& view, Cell spot) {
+    const Uint64 start = SDL_GetTicksNS();
+    if (!generate_stage2(world.map, spot, world.params)) {
+        return false;
+    }
+    world.route_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
+    const Map& m = world.map;
+    SDL_Log("core at %d,%d: stage 2 in %.2f ms (attempt %d%s): path %zu cells, base width %d, "
+            "winding %d%%, target %d, spawn %d,%d",
+            spot.x, spot.y, world.route_ms, m.stats.stage2_attempts,
+            m.stats.stage2_fallback ? ", FALLBACK" : "", m.spine.size(), m.base_width, m.winding,
+            m.target_length, m.spawn.x, m.spawn.y);
+    return view.set_map(world.map);
+}
+
+// The core ghost's top-left for the cell under the cursor: the cursor sits near its middle.
+Cell ghost_at(Cell hover) {
+    return {hover.x - kCoreSize / 2 + 1, hover.y - kCoreSize / 2 + 1};
 }
 
 bool save_target(SDL_Renderer* r, const char* path) {
@@ -192,20 +223,38 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) 
     std::snprintf(line, sizeof line, "seed %016llx  zoom %dx %dx%d  gen %.1fms  cell %d,%d %s",
                   static_cast<unsigned long long>(world.map.seed), s.scale, s.view.w, s.view.h,
                   world.gen_ms, hover.x, hover.y, terrain);
-    const SDL_FRect strip{0.0f, 0.0f, static_cast<float>(s.view.w), 10.0f};
+    char line2[160];
+    const Map& m = world.map;
+    if (m.core) {
+        std::snprintf(line2, sizeof line2,
+                      "path %zu cells  base width %d  winding %d%%  route %.1fms%s", m.spine.size(),
+                      m.base_width, m.winding, world.route_ms,
+                      m.stats.stage2_fallback ? "  FALLBACK" : "");
+    } else {
+        std::snprintf(line2, sizeof line2, "place the core: click inside the zone");
+    }
+    const SDL_FRect strip{0.0f, 0.0f, static_cast<float>(s.view.w), 20.0f};
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
     SDL_RenderFillRect(r, &strip);
     SDL_SetRenderDrawColor(r, 170, 236, 210, 255);
     SDL_RenderDebugText(r, 2.0f, 1.0f, line);
+    SDL_RenderDebugText(r, 2.0f, 11.0f, line2);
 }
 
-// Developer tool: renders the whole map once into a 1920x720 target and saves it.
-int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const char* path) {
+// Developer tool: renders the whole map once into a 1920x720 target and saves it. With
+// --core auto, the core is placed first, so the shot shows the path too.
+int run_map_shot(SDL_Renderer* r, std::uint64_t seed, bool core_auto, const char* path) {
     World world;
     MapView view(r);
     if (!new_map(world, view, seed)) {
         return 1;
+    }
+    if (core_auto) {
+        const std::optional<Cell> spot = central_core_spot(world.map);
+        if (!spot || !place_core(world, view, *spot)) {
+            return 1;
+        }
     }
     SDL_Texture* full =
         SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, kMapPxW, kMapPxH);
@@ -255,7 +304,7 @@ int main(int argc, char** argv) {
 
     const std::uint64_t first_seed = opts.has_seed ? opts.seed : random_seed();
     if (opts.map_shot != nullptr) {
-        const int code = run_map_shot(renderer, first_seed, opts.map_shot);
+        const int code = run_map_shot(renderer, first_seed, opts.core_auto, opts.map_shot);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -271,6 +320,12 @@ int main(int argc, char** argv) {
             exit_code = 1;
         }
         CameraPos cam = centred_on(world.map.zone, screen.view);
+        if (exit_code == 0 && opts.core_auto) {
+            const std::optional<Cell> spot = central_core_spot(world.map);
+            if (!spot || !place_core(world, view, *spot)) {
+                exit_code = 1;
+            }
+        }
 
         pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
         Uint64 last = SDL_GetTicksNS();
@@ -318,6 +373,26 @@ int main(int argc, char** argv) {
                     }
                     break;
                 }
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    if (e.button.button == SDL_BUTTON_LEFT && !world.map.core) {
+                        // Placing the core: a legal spot runs stage 2, then the camera centres
+                        // on the core.
+                        const Cell hover{
+                            (cam.x + static_cast<int>(e.button.x * density) / screen.scale) /
+                                kCellPx,
+                            (cam.y + static_cast<int>(e.button.y * density) / screen.scale) /
+                                kCellPx};
+                        const Cell spot = ghost_at(hover);
+                        if (is_legal_core_spot(world.map, spot)) {
+                            if (!place_core(world, view, spot)) {
+                                running = false;
+                                exit_code = 1;
+                            }
+                            cam =
+                                centred_on(Rect{spot.x, spot.y, kCoreSize, kCoreSize}, screen.view);
+                        }
+                    }
+                    break;
                 case SDL_EVENT_MOUSE_MOTION:
                     if ((e.motion.state & SDL_BUTTON_RMASK) != 0) {
                         // Right-drag: the world follows the mouse, in whole world pixels.
@@ -393,6 +468,10 @@ int main(int argc, char** argv) {
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);
             view.draw(cam, screen.view);
+            if (!world.map.core && world.map.terrain.in_bounds(hover)) {
+                const Cell spot = ghost_at(hover);
+                view.draw_ghost(cam, spot, is_legal_core_spot(world.map, spot));
+            }
             draw_hud(renderer, world, screen, hover);
 
             ++frame;

@@ -105,6 +105,32 @@ Rgb pixel_colour(const Grid<Terrain>& t, int cx, int cy, int px, int py) {
     return kGround;
 }
 
+// The path: packed dirt with gravel and darker edges. The ramp up to a high-ground core is lighter,
+// with step lines across it.
+constexpr Rgb kPath{122, 98, 74};
+constexpr Rgb kPathEdge{92, 72, 56};
+constexpr Rgb kRamp{176, 142, 104};
+constexpr Rgb kRampStep{138, 108, 78};
+
+Rgb path_colour(const Map& m, int cx, int cy, int px, int py) {
+    const bool ramp = m.path.at(cx, cy) == PathKind::Ramp;
+    const auto edge = [&](int dx, int dy) {
+        return !m.path.in_bounds(cx + dx, cy + dy) || m.path.at(cx + dx, cy + dy) == PathKind::None;
+    };
+    const int last = kCellPx - 1;
+    const bool border = (edge(-1, 0) && px == 0) || (edge(1, 0) && px == last) ||
+                        (edge(0, -1) && py == 0) || (edge(0, 1) && py == last);
+    if (border) {
+        return ramp ? kRampStep : kPathEdge;
+    }
+    if (ramp) {
+        return py % 3 == 0 ? kRampStep : kRamp;
+    }
+    const std::uint32_t grain = mix(static_cast<std::uint32_t>(cx * kCellPx + px),
+                                    static_cast<std::uint32_t>(cy * kCellPx + py));
+    return grain % 11u == 0u ? shade(kPath, -14) : grain % 17u == 0u ? shade(kPath, 10) : kPath;
+}
+
 } // namespace
 
 MapView::MapView(SDL_Renderer* renderer)
@@ -133,7 +159,9 @@ bool MapView::set_map(const Map& map) {
                 const std::size_t row =
                     static_cast<std::size_t>(cy * kCellPx + py) * static_cast<std::size_t>(kMapPxW);
                 for (int px = 0; px < kCellPx; ++px) {
-                    const Rgb c = pixel_colour(map.terrain, cx, cy, px, py);
+                    const Rgb c = map.path.at(cx, cy) != PathKind::None
+                                      ? path_colour(map, cx, cy, px, py)
+                                      : pixel_colour(map.terrain, cx, cy, px, py);
                     const std::size_t i = (row + static_cast<std::size_t>(cx * kCellPx + px)) * 4u;
                     pixels_[i + 0] = static_cast<std::uint8_t>(c.r);
                     pixels_[i + 1] = static_cast<std::uint8_t>(c.g);
@@ -144,6 +172,8 @@ bool MapView::set_map(const Map& map) {
         }
     }
     zone_ = map.zone;
+    core_ = map.core;
+    spawn_ = map.spawn;
     if (!SDL_UpdateTexture(terrain_, nullptr, pixels_.data(), kMapPxW * 4)) {
         SDL_Log("terrain upload failed: %s", SDL_GetError());
         return false;
@@ -173,16 +203,62 @@ void MapView::draw(CameraPos cam, ViewSize view) const {
     dst.h = src.h;
     SDL_RenderTexture(renderer_, terrain_, &src, &dst);
 
-    // The core zone: a light tint and an outline.
-    const SDL_FRect zone{static_cast<float>(zone_.x * kCellPx - cam.x),
-                         static_cast<float>(zone_.y * kCellPx - cam.y),
-                         static_cast<float>(zone_.w * kCellPx),
-                         static_cast<float>(zone_.h * kCellPx)};
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer_, 90, 220, 255, 34);
-    SDL_RenderFillRect(renderer_, &zone);
-    SDL_SetRenderDrawColor(renderer_, 90, 220, 255, 230);
-    SDL_RenderRect(renderer_, &zone);
+    const auto world_rect = [&](int cx, int cy, int cw, int ch) {
+        return SDL_FRect{static_cast<float>(cx * kCellPx - cam.x),
+                         static_cast<float>(cy * kCellPx - cam.y), static_cast<float>(cw * kCellPx),
+                         static_cast<float>(ch * kCellPx)};
+    };
+
+    if (!core_) {
+        // The core zone, while the core hasn't been placed: a light tint and an outline.
+        const SDL_FRect zone = world_rect(zone_.x, zone_.y, zone_.w, zone_.h);
+        SDL_SetRenderDrawColor(renderer_, 90, 220, 255, 34);
+        SDL_RenderFillRect(renderer_, &zone);
+        SDL_SetRenderDrawColor(renderer_, 90, 220, 255, 230);
+        SDL_RenderRect(renderer_, &zone);
+        return;
+    }
+
+    // The core: a placeholder reactor (frame, body, glowing heart).
+    const SDL_FRect frame = world_rect(core_->x, core_->y, kCoreSize, kCoreSize);
+    SDL_SetRenderDrawColor(renderer_, 28, 34, 52, 255);
+    SDL_RenderFillRect(renderer_, &frame);
+    const SDL_FRect body{frame.x + 4.0f, frame.y + 4.0f, frame.w - 8.0f, frame.h - 8.0f};
+    SDL_SetRenderDrawColor(renderer_, 70, 96, 128, 255);
+    SDL_RenderFillRect(renderer_, &body);
+    const SDL_FRect heart{frame.x + 24.0f, frame.y + 24.0f, frame.w - 48.0f, frame.h - 48.0f};
+    SDL_SetRenderDrawColor(renderer_, 110, 230, 255, 255);
+    SDL_RenderFillRect(renderer_, &heart);
+    SDL_SetRenderDrawColor(renderer_, 140, 200, 230, 255);
+    SDL_RenderRect(renderer_, &frame);
+
+    // The spawn: a red marker where the path meets the map edge.
+    const SDL_FRect spawn = world_rect(spawn_.x, spawn_.y, 2, 2);
+    SDL_SetRenderDrawColor(renderer_, 220, 64, 52, 255);
+    SDL_RenderFillRect(renderer_, &spawn);
+    SDL_SetRenderDrawColor(renderer_, 255, 190, 120, 255);
+    SDL_RenderRect(renderer_, &spawn);
+}
+
+void MapView::draw_ghost(CameraPos cam, Cell top_left, bool legal) const {
+    const SDL_FRect ghost{static_cast<float>(top_left.x * kCellPx - cam.x),
+                          static_cast<float>(top_left.y * kCellPx - cam.y),
+                          static_cast<float>(kCoreSize * kCellPx),
+                          static_cast<float>(kCoreSize * kCellPx)};
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    if (legal) {
+        SDL_SetRenderDrawColor(renderer_, 90, 230, 140, 90);
+    } else {
+        SDL_SetRenderDrawColor(renderer_, 240, 70, 60, 90);
+    }
+    SDL_RenderFillRect(renderer_, &ghost);
+    if (legal) {
+        SDL_SetRenderDrawColor(renderer_, 140, 255, 180, 240);
+    } else {
+        SDL_SetRenderDrawColor(renderer_, 255, 120, 100, 240);
+    }
+    SDL_RenderRect(renderer_, &ghost);
 }
 
 } // namespace pixeltd::game
