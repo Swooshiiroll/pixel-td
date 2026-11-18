@@ -9,4 +9,4 @@ Closes #
 - [ ] `tools/dev.sh check` passes locally
 - [ ] `CHANGELOG.md` has a line under Unreleased
 
-**Test build:** CI → this pull request's run → Artifacts → `pixel-td-<branch>-<sha>`.
+**Test build:** CI → this pull request's run → Artifacts → `pixel-td-<platform>-<branch>-<sha>`.

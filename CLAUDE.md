@@ -64,7 +64,7 @@ with the owner before writing any code.
    - Put `Closes #<issue>` in it.
    - Add a line to `CHANGELOG.md` under Unreleased.
 5. **Wait for CI:** `gh pr checks --watch`. Then give the owner the test-build link: the run's
-   Artifacts, `pixel-td-<branch>-<sha>`.
+   Artifacts, `pixel-td-<platform>-<branch>-<sha>`.
 6. **Merge only when the owner says so:** `gh pr merge --squash --delete-branch`.
 
 **Releasing:**
