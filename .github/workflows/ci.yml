@@ -1,0 +1,101 @@
+name: CI
+
+# Every push to any branch: static checks, unit tests and a test build (Linux and Windows).
+# main only takes pull requests whose head commit passed check, unit-tests and build.
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (C++20, CMake, Ninja, SDL3 libraries, clang-format 22.1.3)
+        run: |
+          sudo tools/linux-deps.sh
+          pipx install clang-format==22.1.3
+      - name: Setup
+        run: tools/dev.sh setup
+      - name: Static checks
+        run: tools/dev.sh check
+
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (C++20, CMake, Ninja, SDL3 libraries, clang-format 22.1.3)
+        run: |
+          sudo tools/linux-deps.sh
+          pipx install clang-format==22.1.3
+      - name: Setup
+        run: tools/dev.sh setup
+      - name: Unit tests
+        run: tools/dev.sh test
+      - name: Test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: out/*.log
+
+  build-platform:
+    name: build-${{ matrix.platform }}
+    needs: [check, unit-tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+          - platform: windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (C++20, CMake, Ninja, SDL3 libraries)
+        if: runner.os == 'Linux'
+        run: sudo tools/linux-deps.sh
+      # Windows: the runner image already has Visual Studio (MSVC) and CMake.
+      - name: Setup
+        run: tools/dev.sh setup
+      - name: Build
+        run: tools/dev.sh build
+      - name: Artifact name
+        id: names
+        run: echo "base=pixel-td-${{ matrix.platform }}-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.base }}
+          path: build/
+          retention-days: 14
+
+  # The required status check is named "build": it passes only if every platform build passed.
+  build:
+    name: build
+    needs: [build-platform]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All platform builds passed
+        run: |
+          echo "platform builds: ${{ needs.build-platform.result }}"
+          [ "${{ needs.build-platform.result }}" = "success" ]
