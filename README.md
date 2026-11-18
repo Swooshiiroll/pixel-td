@@ -23,14 +23,16 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
 **Layout:** `src/core` (simulation, no SDL), `src/game` (SDL3 front end), `tests` (doctest),
 `design` (design docs), `tools` (dev scripts).
 
-**Running:** `out/stage/pixel-td/PixelTD`. Each launch generates a new random map.
+**Running:** `out/stage/pixel-td/PixelTD`. Each launch generates a new random map. Left-click inside the
+highlighted zone to place the core, and the spawn and path are generated.
 
 - **Camera:** pan with WASD, the arrow keys, the window edges or a right-drag. Zoom with the
   mouse wheel, or with + and -.
 - **Keys:** F5 makes a new random map (developer tool). Esc quits.
 - **Developer flags:**
   - `--seed N` uses seed N (decimal, or hex with `0x`).
-  - `--map-shot f.bmp` saves the whole 1920x720 map and exits.
+  - `--core auto` places the core at the zone's most central legal spot.
+  - `--map-shot f.bmp` saves the whole 1920x720 map and exits (with `--core auto`, the path too).
   - `--frames N --screenshot f.bmp` renders N frames, saves the last view and exits.
 
 See `design/world.md`, Developer tools.
