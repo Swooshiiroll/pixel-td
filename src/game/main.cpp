@@ -2,16 +2,19 @@
 // where the scale is a whole number, then shown at that scale: pixels stay square and crisp at
 // every zoom step, and the view always fills the window (design/world.md, Camera).
 //
-//   PixelTD [--seed N] [--core auto] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
+//   PixelTD [--seed N] [--core auto [--probe X,Y]...] [--map-shot file.bmp] [--frames N]
+//           [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --core auto       developer tool: place the core at the zone's most central legal spot
+//     --probe X,Y       developer tool: with --core auto, place a probe at cell X,Y (repeatable)
 //     --map-shot F      developer tool: save the whole 1920x720 map to F (BMP), then exit
 //     --frames N        quit after N frames (smoke tests)
 //     --screenshot F    with --frames: save the last view frame to F (BMP)
 //
 // Controls: left-click inside the zone places the core (the path is generated then); pan with
 // WASD / arrows / the window edges / right-drag; zoom with the mouse wheel or + and -; F5 makes a
-// new random map (developer tool); Esc quits.
+// new random map and P toggles the probe (developer tools: a probe is a stand-in light tower
+// that explores fog, previewing its range and blocked sight first); Esc quits.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -22,12 +25,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
+#include <vector>
 
 #include "core/camera.hpp"
 #include "core/fixed_step.hpp"
+#include "core/fog.hpp"
 #include "core/gen_params.hpp"
 #include "core/grid.hpp"
 #include "core/hash.hpp"
+#include "core/los.hpp"
 #include "core/map.hpp"
 #include "core/mapgen.hpp"
 #include "game/map_view.hpp"
@@ -49,6 +55,7 @@ struct Options {
     bool has_seed = false;
     std::uint64_t seed = 0;
     bool core_auto = false;
+    std::vector<Cell> probes; // --probe X,Y: probes placed at start (with --core auto)
 };
 
 bool parse_options(int argc, char** argv, Options& out) {
@@ -64,6 +71,16 @@ bool parse_options(int argc, char** argv, Options& out) {
                    std::strcmp(argv[i + 1], "auto") == 0) {
             out.core_auto = true;
             ++i;
+        } else if (std::strcmp(argv[i], "--probe") == 0 && has_value) {
+            char* comma = nullptr;
+            char* end = nullptr;
+            const long x = std::strtol(argv[++i], &comma, 10);
+            const long y = *comma == ',' ? std::strtol(comma + 1, &end, 10) : 0;
+            if (*comma != ',' || end == nullptr || *end != '\0') {
+                std::fprintf(stderr, "--probe takes X,Y (cells)\n");
+                return false;
+            }
+            out.probes.push_back({static_cast<int>(x), static_cast<int>(y)});
         } else if (std::strcmp(argv[i], "--seed") == 0 && has_value) {
             char* end = nullptr;
             out.seed = std::strtoull(argv[++i], &end, 0);
@@ -73,8 +90,8 @@ bool parse_options(int argc, char** argv, Options& out) {
                 return false;
             }
         } else {
-            std::fprintf(stderr, "usage: PixelTD [--seed N] [--map-shot file.bmp] [--frames N] "
-                                 "[--screenshot file.bmp]\n");
+            std::fprintf(stderr, "usage: PixelTD [--seed N] [--core auto [--probe X,Y]...] "
+                                 "[--map-shot file.bmp] [--frames N] [--screenshot file.bmp]\n");
             return false;
         }
     }
@@ -86,22 +103,38 @@ std::uint64_t random_seed() {
     return splitmix64(SDL_GetPerformanceCounter() ^ (SDL_GetTicksNS() << 17u));
 }
 
+// A developer probe: a stand-in for a light tower that explores fog (until the arena has towers).
+struct Probe {
+    Cell top_left;
+    Height height;
+};
+
 struct World {
     Map map;
     GenParams params;
+    Fog fog;
+    std::vector<Probe> probes;
     double gen_ms = 0.0;   // stage 1
     double route_ms = 0.0; // stage 2
 };
 
+// A light tower's range in world pixels at this height (high ground adds its bonus).
+int light_range_px(const GenParams& p, Height h) {
+    const int bonus = h == Height::High ? p.high_ground_bonus_pct : 0;
+    return p.light_range_cells * kCellPx * (100 + bonus) / 100;
+}
+
 bool new_map(World& world, MapView& view, std::uint64_t seed) {
     const Uint64 start = SDL_GetTicksNS();
     world.map = generate_stage1(seed, world.params);
+    world.fog.reset();
+    world.probes.clear();
     world.gen_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
     const GenStats& s = world.map.stats;
     SDL_Log("map seed 0x%016llx: stage 1 in %.2f ms (attempt %d, zone try %d%s)",
             static_cast<unsigned long long>(seed), world.gen_ms, s.stage1_attempts, s.zone_tries,
             s.stage1_fallback ? ", FALLBACK" : "");
-    return view.set_map(world.map);
+    return view.set_map(world.map, world.fog);
 }
 
 // Places the core at `spot` and generates the spawn and path (stage 2). False if the spot isn't
@@ -112,13 +145,46 @@ bool place_core(World& world, MapView& view, Cell spot) {
         return false;
     }
     world.route_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
+    // Placing the core explores the ground around it (and its ramp).
+    world.fog.reset();
+    world.probes.clear();
+    world.fog.explore_core(world.map, world.params.light_range_cells);
     const Map& m = world.map;
     SDL_Log("core at %d,%d: stage 2 in %.2f ms (attempt %d%s): path %zu cells, base width %d, "
             "winding %d%%, target %d, spawn %d,%d",
             spot.x, spot.y, world.route_ms, m.stats.stage2_attempts,
             m.stats.stage2_fallback ? ", FALLBACK" : "", m.spine.size(), m.base_width, m.winding,
             m.target_length, m.spawn.x, m.spawn.y);
-    return view.set_map(world.map);
+    return view.set_map(world.map, world.fog);
+}
+
+// A probe can go on a legal light-tower spot that no other probe covers.
+bool probe_spot_ok(const World& world, Cell top_left) {
+    if (!is_light_spot(world.map, top_left)) {
+        return false;
+    }
+    for (const Probe& p : world.probes) {
+        if (std::abs(p.top_left.x - top_left.x) < kLightSize &&
+            std::abs(p.top_left.y - top_left.y) < kLightSize) {
+            return false;
+        }
+    }
+    return true;
+}
+
+enum class ProbeResult { Placed, NotHere, Failed };
+
+// Places a probe with its top-left at `at` (if the spot is free and legal); it explores fog like a
+// light tower would, and only the explored area is re-baked.
+ProbeResult place_probe(World& world, MapView& view, Cell at) {
+    if (!probe_spot_ok(world, at)) {
+        return ProbeResult::NotHere;
+    }
+    const Height h = height_at(world.map, at);
+    world.probes.push_back({at, h});
+    const Rect lifted = world.fog.explore_from(world.map, centre_of(at, kLightSize),
+                                               light_range_px(world.params, h), h);
+    return view.update(world.map, world.fog, lifted) ? ProbeResult::Placed : ProbeResult::Failed;
 }
 
 // The core ghost's top-left for the cell under the cursor: the cursor sits near its middle.
@@ -201,7 +267,7 @@ void zoom_by(SDL_Renderer* r, Screen& s, CameraPos& cam, int delta, int px, int 
     cam = clamp_camera(zoom_about(cam, old_scale, s.scale, px, py), s.view);
 }
 
-void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) {
+void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover, bool probe_mode) {
     char line[160];
     const char* terrain = "";
     if (world.map.terrain.in_bounds(hover)) {
@@ -226,10 +292,12 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) 
     char line2[160];
     const Map& m = world.map;
     if (m.core) {
-        std::snprintf(line2, sizeof line2,
-                      "path %zu cells  base width %d  winding %d%%  route %.1fms%s", m.spine.size(),
-                      m.base_width, m.winding, world.route_ms,
-                      m.stats.stage2_fallback ? "  FALLBACK" : "");
+        std::snprintf(
+            line2, sizeof line2,
+            "path %zu cells  base width %d  winding %d%%  route %.1fms%s  [P] probe %s (%zu)",
+            m.spine.size(), m.base_width, m.winding, world.route_ms,
+            m.stats.stage2_fallback ? "  FALLBACK" : "", probe_mode ? "ON" : "off",
+            world.probes.size());
     } else {
         std::snprintf(line2, sizeof line2, "place the core: click inside the zone");
     }
@@ -260,6 +328,12 @@ int run_map_shot(SDL_Renderer* r, std::uint64_t seed, bool core_auto, const char
         SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, kMapPxW, kMapPxH);
     if (full == nullptr) {
         SDL_Log("map target failed: %s", SDL_GetError());
+        return 1;
+    }
+    // The shot shows the whole map explored, so the full route is visible.
+    world.fog.explore_all();
+    if (!view.set_map(world.map, world.fog)) {
+        SDL_DestroyTexture(full);
         return 1;
     }
     SDL_SetRenderTarget(r, full);
@@ -325,6 +399,11 @@ int main(int argc, char** argv) {
             if (!spot || !place_core(world, view, *spot)) {
                 exit_code = 1;
             }
+            for (const Cell at : opts.probes) {
+                if (exit_code == 0 && place_probe(world, view, at) == ProbeResult::Failed) {
+                    exit_code = 1;
+                }
+            }
         }
 
         pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
@@ -334,6 +413,7 @@ int main(int argc, char** argv) {
         float wheel = 0.0f;
         long frame = 0;
         bool running = exit_code == 0;
+        bool probe_mode = false; // developer probe: P toggles it once the core is placed
 
         while (running) {
             const float density = SDL_GetWindowPixelDensity(window);
@@ -351,7 +431,10 @@ int main(int argc, char** argv) {
                             running = false;
                             exit_code = 1;
                         }
+                        probe_mode = false;
                         cam = centred_on(world.map.zone, screen.view);
+                    } else if (e.key.key == SDLK_P && world.map.core) {
+                        probe_mode = !probe_mode;
                     } else if (e.key.key == SDLK_EQUALS || e.key.key == SDLK_KP_PLUS) {
                         zoom_by(renderer, screen, cam, 1, screen.out_w / 2, screen.out_h / 2);
                     } else if (e.key.key == SDLK_MINUS || e.key.key == SDLK_KP_MINUS) {
@@ -373,15 +456,16 @@ int main(int argc, char** argv) {
                     }
                     break;
                 }
-                case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    if (e.button.button == SDL_BUTTON_LEFT && !world.map.core) {
+                case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+                    if (e.button.button != SDL_BUTTON_LEFT) {
+                        break;
+                    }
+                    const Cell hover{
+                        (cam.x + static_cast<int>(e.button.x * density) / screen.scale) / kCellPx,
+                        (cam.y + static_cast<int>(e.button.y * density) / screen.scale) / kCellPx};
+                    if (!world.map.core) {
                         // Placing the core: a legal spot runs stage 2, then the camera centres
                         // on the core.
-                        const Cell hover{
-                            (cam.x + static_cast<int>(e.button.x * density) / screen.scale) /
-                                kCellPx,
-                            (cam.y + static_cast<int>(e.button.y * density) / screen.scale) /
-                                kCellPx};
                         const Cell spot = ghost_at(hover);
                         if (is_legal_core_spot(world.map, spot)) {
                             if (!place_core(world, view, spot)) {
@@ -391,8 +475,13 @@ int main(int argc, char** argv) {
                             cam =
                                 centred_on(Rect{spot.x, spot.y, kCoreSize, kCoreSize}, screen.view);
                         }
+                    } else if (probe_mode &&
+                               place_probe(world, view, hover) == ProbeResult::Failed) {
+                        running = false;
+                        exit_code = 1;
                     }
                     break;
+                }
                 case SDL_EVENT_MOUSE_MOTION:
                     if ((e.motion.state & SDL_BUTTON_RMASK) != 0) {
                         // Right-drag: the world follows the mouse, in whole world pixels.
@@ -472,7 +561,15 @@ int main(int argc, char** argv) {
                 const Cell spot = ghost_at(hover);
                 view.draw_ghost(cam, spot, is_legal_core_spot(world.map, spot));
             }
-            draw_hud(renderer, world, screen, hover);
+            for (const Probe& p : world.probes) {
+                view.draw_probe(cam, p.top_left, SDL_Color{180, 120, 255, 220});
+            }
+            if (probe_mode && world.map.terrain.in_bounds(hover)) {
+                const Height h = height_at(world.map, hover);
+                view.draw_probe_preview(cam, world.map, hover, probe_spot_ok(world, hover),
+                                        light_range_px(world.params, h), h);
+            }
+            draw_hud(renderer, world, screen, hover, probe_mode);
 
             ++frame;
             const bool last_frame = opts.frames > 0 && frame >= opts.frames;
