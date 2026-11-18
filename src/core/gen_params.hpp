@@ -40,8 +40,29 @@ struct GenParams {
     int min_spawn_dist = 60;  // path cells from the core to the farthest edge entry, at least
     int ramp_max = 6;         // a high-ground core's ramp stays within this many cells of it
 
+    // --- Path (stage 2). Lengths count spine cells: 1.5x to 2.5x the map's width.
+    int path_min_len = 240;
+    int path_max_len = 400;
+    int base_width_min = 2;
+    int base_width_max = 4;
+    int chokes_min = 1; // chokepoints: width 2
+    int chokes_max = 3;
+    int choke_len_min = 4;
+    int choke_len_max = 8;
+    int wides_min = 1; // wide stretches: wider than the base, up to wide_width_max
+    int wides_max = 2;
+    int wide_len_min = 8;
+    int wide_len_max = 20;
+    int wide_width_max = 6;
+    int separation = 5;    // the route keeps this far (cells) from the core once it has left it
+    int stretch_gap = 3;   // cells between two stretches of the path that are far apart along it
+    int stretch_span = 20; // spine cells apart along the path that make two stretches "far apart"
+    int light_range_cells = 6; // light-tower range until towers define it
+    int build_window = 10;     // every this many spine cells need a light-tower spot in range
+
     // --- Retries.
     int stage1_attempts = 64; // then the known-safe fallback layout
+    int stage2_attempts = 16; // then the plain shortest route
 };
 
 } // namespace pixeltd

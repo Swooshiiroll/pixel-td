@@ -63,7 +63,7 @@ TEST_CASE("different seeds give different maps") {
 TEST_CASE("golden stage 1 maps") {
     CHECK(map_hash(generate_stage1(1)) == 0x8b3d1da0930fa823ull);
     CHECK(map_hash(generate_stage1(0xC0FFEEull)) == 0x98f4b9003855eab7ull);
-    CHECK(map_hash(generate_stage1(0xFFFFFFFFFFFFFFFFull)) == 0x9f8bc8d5c20e2682ull);
+    CHECK(map_hash(generate_stage1(0xFFFFFFFFFFFFFFFFull)) == 0x29b015944b3f39ebull);
 }
 
 TEST_CASE("core spots must be inside the zone, on one height, off blockers") {

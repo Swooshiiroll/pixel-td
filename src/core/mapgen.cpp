@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/gen_util.hpp"
 #include "core/hash.hpp"
 #include "core/rng.hpp"
 
@@ -23,71 +24,10 @@ constexpr int kNoiseMax = 3 * 255;
 
 using Mask = Grid<std::uint8_t>;
 
-int rand_range(Rng& rng, int lo, int hi) { // inclusive
-    return lo + static_cast<int>(rng.next_below(static_cast<std::uint32_t>(hi - lo + 1)));
-}
-
-constexpr std::array<Cell, 4> kDirs = {{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
-
-// Breadth-first steps over 4-connected cells where passable(cell) holds, from `sources`.
-// Unreached cells stay -1. The queue order is fixed, so results are the same everywhere.
-template <class Passable>
-void bfs(Grid<int>& dist, const std::vector<Cell>& sources, Passable passable) {
-    dist.fill(-1);
-    std::vector<Cell> queue;
-    queue.reserve(static_cast<std::size_t>(dist.width() * dist.height()));
-    for (const Cell s : sources) {
-        if (dist.at(s) < 0) {
-            dist.at(s) = 0;
-            queue.push_back(s);
-        }
-    }
-    for (std::size_t head = 0; head < queue.size(); ++head) {
-        const Cell c = queue[head];
-        const int next = dist.at(c) + 1;
-        for (const Cell d : kDirs) {
-            const Cell n{c.x + d.x, c.y + d.y};
-            if (dist.in_bounds(n) && dist.at(n) < 0 && passable(n)) {
-                dist.at(n) = next;
-                queue.push_back(n);
-            }
-        }
-    }
-}
-
-// Adds integer value noise to `field`: random lattice values in [0, 255] every `step` cells,
-// blended with a smoothstep curve, times `weight`. Integer-only, so every platform agrees.
-void add_value_noise(Grid<int>& field, Rng& rng, int step, int weight) {
-    const int lw = field.width() / step + 2;
-    const int lh = field.height() / step + 2;
-    std::vector<int> lattice(static_cast<std::size_t>(lw) * static_cast<std::size_t>(lh));
-    for (int& v : lattice) {
-        v = static_cast<int>(rng.next_below(256u));
-    }
-    // Smoothstep weight for offset f within a step, in [0, 256]: 256 * (3t^2 - 2t^3), t = f/step.
-    std::vector<int> ease(static_cast<std::size_t>(step));
-    for (int f = 0; f < step; ++f) {
-        const long long t2 = static_cast<long long>(f) * f;
-        const long long num = 256LL * (3LL * t2 * step - 2LL * t2 * f);
-        ease[static_cast<std::size_t>(f)] =
-            static_cast<int>(num / (static_cast<long long>(step) * step * step));
-    }
-    const auto lat = [&](int gx, int gy) {
-        return lattice[static_cast<std::size_t>(gy) * static_cast<std::size_t>(lw) +
-                       static_cast<std::size_t>(gx)];
-    };
-    for (int y = 0; y < field.height(); ++y) {
-        const int gy = y / step;
-        const int wy = ease[static_cast<std::size_t>(y % step)];
-        for (int x = 0; x < field.width(); ++x) {
-            const int gx = x / step;
-            const int wx = ease[static_cast<std::size_t>(x % step)];
-            const int top = lat(gx, gy) * (256 - wx) + lat(gx + 1, gy) * wx;
-            const int bottom = lat(gx, gy + 1) * (256 - wx) + lat(gx + 1, gy + 1) * wx;
-            field.at(x, y) += weight * ((top * (256 - wy) + bottom * wy) >> 16);
-        }
-    }
-}
+using gen::add_value_noise;
+using gen::bfs;
+using gen::kDirs;
+using gen::rand_range;
 
 // Marks about `target` cells with the highest field values, only where `allowed` (if given).
 Mask top_cells(const Grid<int>& field, int target, const Mask* allowed) {
@@ -264,12 +204,16 @@ bool zone_ok(const Map& map, const Reachability& reach, const GenParams& p) {
     if (static_cast<int>(spots.size()) < p.min_legal_spots) {
         return false;
     }
+    if (reach.farthest_edge_from(map.zone) < p.min_spawn_dist) {
+        return false;
+    }
+    // Every legal spot must reach a map edge, and one far enough away for a fair spawn.
     for (const Cell s : spots) {
-        if (!reach.routable(s)) {
+        if (!reach.far_edge_reachable(s, map.zone)) {
             return false;
         }
     }
-    return reach.farthest_edge_from(map.zone) >= p.min_spawn_dist;
+    return true;
 }
 
 } // namespace
@@ -305,7 +249,8 @@ bool BrushFit::fits(Cell spine, int width) const noexcept {
 // --- Reachability -------------------------------------------------------------------------------
 
 Reachability::Reachability(const Grid<Terrain>& terrain, const GenParams& params)
-    : terrain_(&terrain), params_(params), fit_(terrain), edge_dist_(kMapW, kMapH, -1) {
+    : terrain_(&terrain), params_(params), fit_(terrain), edge_dist_(kMapW, kMapH, -1),
+      region_(kMapW, kMapH, -1) {
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
             const bool on_edge = x == 0 || y == 0 || x == kMapW - 2 || y == kMapH - 2;
@@ -315,6 +260,29 @@ Reachability::Reachability(const Grid<Terrain>& terrain, const GenParams& params
         }
     }
     bfs(edge_dist_, edge_entries_, [this](Cell c) { return fit_.fits(c, 2); });
+
+    // Label the connected regions of 2-wide path cells.
+    std::vector<Cell> queue;
+    for (int y = 0; y < kMapH; ++y) {
+        for (int x = 0; x < kMapW; ++x) {
+            if (region_.at(x, y) >= 0 || !fit_.fits({x, y}, 2)) {
+                continue;
+            }
+            queue.assign(1, Cell{x, y});
+            region_.at(x, y) = regions_;
+            for (std::size_t head = 0; head < queue.size(); ++head) {
+                const Cell c = queue[head];
+                for (const Cell d : kDirs) {
+                    const Cell n{c.x + d.x, c.y + d.y};
+                    if (region_.in_bounds(n) && region_.at(n) < 0 && fit_.fits(n, 2)) {
+                        region_.at(n) = regions_;
+                        queue.push_back(n);
+                    }
+                }
+            }
+            ++regions_;
+        }
+    }
 }
 
 void core_access_cells(Cell s, std::vector<Cell>& out) {
@@ -329,26 +297,32 @@ void core_access_cells(Cell s, std::vector<Cell>& out) {
     }
 }
 
-bool Reachability::routable(Cell spot) const {
+std::vector<int> Reachability::regions_of(Cell spot) const {
+    std::vector<int> found;
+    const auto note = [&](Cell c) {
+        if (fit_.fits(c, 2) && edge_dist_.at(c) >= 0 &&
+            std::find(found.begin(), found.end(), region_.at(c)) == found.end()) {
+            found.push_back(region_.at(c));
+        }
+    };
     std::vector<Cell> access;
     core_access_cells(spot, access);
     for (const Cell c : access) {
-        if (fit_.fits(c, 2) && edge_dist_.at(c) >= 0) {
-            return true;
-        }
+        note(c);
     }
     if (terrain_->at(spot) != Terrain::High) {
-        return false;
+        return found;
     }
 
-    // A high-ground core: try a ramp down its own plateau, within ramp_max cells of the core.
+    // A high-ground core: also every region its ramp reaches (down its own plateau, within
+    // ramp_max cells of the core).
     const int r = params_.ramp_max;
     const Rect core{spot.x, spot.y, kCoreSize, kCoreSize};
-    const Rect region{spot.x - r, spot.y - r, kCoreSize + 2 * r, kCoreSize + 2 * r};
-    const Rect window{region.x - 2, region.y - 2, region.w + 4, region.h + 4};
+    const Rect area{spot.x - r, spot.y - r, kCoreSize + 2 * r, kCoreSize + 2 * r};
+    const Rect window{area.x - 2, area.y - 2, area.w + 4, area.h + 4};
     const auto local = [&](Cell c) { return Cell{c.x - window.x, c.y - window.y}; };
 
-    // Plateau cells the ramp may use: high ground connected to the core, inside the region.
+    // Plateau cells the ramp may use: high ground connected to the core, inside the area.
     Grid<std::uint8_t> plateau(window.w, window.h, 0);
     std::vector<Cell> queue{spot};
     plateau.at(local(spot)) = 1;
@@ -356,7 +330,7 @@ bool Reachability::routable(Cell spot) const {
         const Cell c = queue[head];
         for (const Cell d : kDirs) {
             const Cell n{c.x + d.x, c.y + d.y};
-            if (region.contains(n) && terrain_->in_bounds(n) && plateau.at(local(n)) == 0 &&
+            if (area.contains(n) && terrain_->in_bounds(n) && plateau.at(local(n)) == 0 &&
                 terrain_->at(n) == Terrain::High) {
                 plateau.at(local(n)) = 1;
                 queue.push_back(n);
@@ -370,7 +344,7 @@ bool Reachability::routable(Cell spot) const {
         }
         const Terrain t = terrain_->at(c);
         return t == Terrain::Ground ||
-               (t == Terrain::High && region.contains(c) && plateau.at(local(c)) != 0);
+               (t == Terrain::High && area.contains(c) && plateau.at(local(c)) != 0);
     };
     const auto ramp_walk = [&](Cell c) {
         return window.contains(c) && window.contains(Cell{c.x + 1, c.y + 1}) && path_ok(c.x, c.y) &&
@@ -387,9 +361,7 @@ bool Reachability::routable(Cell spot) const {
     }
     for (std::size_t head = 0; head < queue.size(); ++head) {
         const Cell c = queue[head];
-        if (fit_.fits(c, 2) && edge_dist_.at(c) >= 0) {
-            return true;
-        }
+        note(c);
         for (const Cell d : kDirs) {
             const Cell n{c.x + d.x, c.y + d.y};
             if (ramp_walk(n) && seen.at(local(n)) == 0) {
@@ -398,10 +370,13 @@ bool Reachability::routable(Cell spot) const {
             }
         }
     }
-    return false;
+    return found;
 }
 
 int Reachability::farthest_edge_from(const Rect& zone) const {
+    // One search from every path cell around the zone gives, per region, the distance from the
+    // zone's cells in that region to each of its edge entries. A core in that region starts from
+    // some of those cells, so its own distance to each entry is at least as far.
     const int pad = params_.ramp_max + 2;
     std::vector<Cell> sources;
     for (int y = zone.y - pad; y < zone.y + zone.h + pad; ++y) {
@@ -411,6 +386,8 @@ int Reachability::farthest_edge_from(const Rect& zone) const {
             }
         }
     }
+    far_zone_ = zone;
+    far_by_region_.assign(static_cast<std::size_t>(regions_), -1);
     if (sources.empty()) {
         return -1;
     }
@@ -418,9 +395,23 @@ int Reachability::farthest_edge_from(const Rect& zone) const {
     bfs(dist, sources, [this](Cell c) { return fit_.fits(c, 2); });
     int farthest = -1;
     for (const Cell e : edge_entries_) {
+        int& best = far_by_region_[static_cast<std::size_t>(region_.at(e))];
+        best = std::max(best, dist.at(e));
         farthest = std::max(farthest, dist.at(e));
     }
     return farthest;
+}
+
+bool Reachability::far_edge_reachable(Cell spot, const Rect& zone) const {
+    if (far_by_region_.empty() || !(far_zone_ == zone)) {
+        (void)farthest_edge_from(zone);
+    }
+    for (const int r : regions_of(spot)) {
+        if (far_by_region_[static_cast<std::size_t>(r)] >= params_.min_spawn_dist) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // --- Stage 1 ------------------------------------------------------------------------------------
