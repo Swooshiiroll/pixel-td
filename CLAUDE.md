@@ -5,8 +5,8 @@ SDL3 and CMake. Two people work on it: the owner, who decides and tests, and Cla
 implements.
 
 - Repo: https://github.com/Swooshiiroll/pixel-td
-- Board: {{BOARD_URL}}
-- Workflow page: {{DOC_URL}}
+- Board: https://github.com/users/Swooshiiroll/projects/4
+- Workflow page: https://claude.ai/artifact/T4JxzLByN4q8NrNfB8byrX
 
 ## Models
 
