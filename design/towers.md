@@ -125,12 +125,14 @@ the part it upgrades.
 ## Interactions
 
 - **World ([world.md](world.md)):**
-  - footprints on the 12 px grid, never straddling heights;
-  - high ground gives range and fires over rocks;
-  - lobbed weapons arc over rocks;
-  - cliffs block everything;
-  - towers explore fog within their range, by direct sight. That includes lobbed towers, which
-    need a spotter to hit enemies behind rocks.
+  - footprints on the hidden 12 px grid, on fairly flat ground (no cliffs or rock formations);
+  - range grows with height above the target, and shrinks when shooting uphill;
+  - direct fire needs a clear line over the terrain, while lobbed weapons arc over terrain;
+  - rock formations block every shot;
+  - towers explore fog within their reach, by direct sight. That includes lobbed towers, which
+    need a spotter to hit enemies behind a ridge.
+  - Towers also shape the enemies' route (mazing), and enemies break them if sealed in
+    (issue #11).
 - **Economy:** gold pays for building, module swaps and Mk upgrades. Selling and swaps refund part
   of it. Income is open (see [game.md](game.md)).
 - **Draft:** the draft offers parts, starting from the kit. How many choices it offers, and how
@@ -145,7 +147,8 @@ the part it upgrades.
 ## UI
 
 - **Build menu:** pick a chassis, a weapon and a module from the pool.
-  - A preview shows the footprint, the range (with the high-ground bonus) and the total cost.
+  - A preview shows the footprint, the reach (adjusted for height; cells out of reach or sight are
+    shaded) and the total cost.
   - Weapons that don't fit the chassis are greyed out.
 - **Tower panel:**
   - the three parts with their Mk levels;

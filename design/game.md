@@ -27,15 +27,17 @@ drafted during the run. It should feel different each run, and stay easy to hold
 - **No meta-progression:** nothing carries over between runs.
 
 **Setting:** retro-futuristic sci-fi. The defense is a planet-surface outpost: a core (a reactor or
-beacon) holds against enemies marching in from the map edge.
+beacon) near the centre of the map holds against enemies coming from seeded spawns, at the map's
+edges or inside it.
 
 **View**
 - Flat top-down, looking straight down.
 - Pixel-perfect: the world is drawn 1:1 and shown at a whole-number scale. The view fills the
   window, and the default zoom shows about 640x360 world pixels.
-- The map is bigger than the screen (about 3x2 screens). The camera pans and zooms in whole-number
-  steps ([world.md](world.md)).
-- Placement grid: 12 px cells.
+- The map is 3840 x 2160 px: four 1080p screens in a 2 x 2 layout, or 36 views at the default zoom.
+  The camera pans and zooms in whole-number steps ([world.md](world.md)).
+- The terrain is a seamless heightmap: brightness shows height, and hue shows the ground material.
+- A hidden placement grid of 12 px cells (320 x 180) sits under it.
   - A light tower is 2x2 cells (24 px).
   - A heavy tower is 4x4 (48 px).
   - The core is 6x6 (72 px).
@@ -73,13 +75,14 @@ The owner chose **arena first**: towers are designed in the game from the start.
 real map generator, so the generator comes first.
 
 1. **Map generator** ([world.md](world.md)):
-   - terrain;
-   - the core zone and placing the core;
-   - one spawn and its path;
-   - line of sight;
+   - the heightmap: hills, mesas, cliffs and rock formations;
+   - the seeded core near the centre and 3 seeded spawns;
+   - line of sight and height-based range;
    - fog;
    - the camera.
-2. **Test arena + live tuning** (`test-arena.md`, still to be designed in its own question round).
+2. **Test arena + live tuning** (`test-arena.md`), together with **enemy pathfinding and mazing**
+   (issue #11): enemies find their own way, and towers shape the route. Both still to be designed
+   in their own question rounds.
 3. **First parts**, designed by pitch and pick and tuned in the arena ([towers.md](towers.md)).
 4. **Minimal run loop:** waves, the draft, gold and the core falling.
 
@@ -88,7 +91,7 @@ real map generator, so the generator comes first.
 - **v0.1, First playable:** the four steps above.
 - **v0.2, Roguelite loop:**
   - perks, modifiers and events;
-  - the path shapes of later versions (several spawns, forks, late spawns).
+  - richer spawns and maps in later versions (the owner's rule: start simple).
 - **v0.3, Art & polish:** the chosen art style throughout.
 
 ## Open questions

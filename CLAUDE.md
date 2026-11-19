@@ -104,9 +104,9 @@ Logs go to `out/`.
   advances in fixed 60 Hz ticks (`FixedStep`). Never use wall-clock time or `rand()` in the sim.
 - **Pixel-perfect view:** the world is drawn 1:1 in world pixels into a render target. The window
   shows it at a whole-number scale, and you never draw at a fractional scale.
-  - **Grid:** 12 px placement cells. A light tower is 2x2 cells (24 px), a heavy tower 4x4
-    (48 px), and the core 6x6 (72 px).
-  - **Map:** 160x60 cells (1920x720 px).
+  - **Grid:** a hidden grid of 12 px cells; the terrain itself is drawn seamless (no tiles or grid
+    lines). A light tower is 2x2 cells (24 px), a heavy tower 4x4 (48 px), and the core 6x6 (72 px).
+  - **Map:** 320x180 cells (3840x2160 px), a heightmap.
   - **Zoom:** whole-number steps. The view fills the window, and the default zoom shows about
     640x360. See `design/world.md`.
   - **Pure maths stays in `src/core`.** That covers `core/camera.hpp`, and the front end only
