@@ -30,7 +30,7 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
 - **Keys:** F5 makes a new random map (developer tool). Esc quits.
 - **Developer flags:**
   - `--seed N` uses seed N (decimal, or hex with `0x`).
-  - `--map-shot f.bmp` saves the whole 1920x720 map and exits.
+  - `--map-shot f.bmp` saves the whole 3840x2160 map and exits.
   - `--frames N --screenshot f.bmp` renders N frames, saves the last view and exits.
 
 See `design/world.md`, Developer tools.

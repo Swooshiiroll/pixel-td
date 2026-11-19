@@ -4,7 +4,7 @@
 //
 //   PixelTD [--seed N] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
-//     --map-shot F      developer tool: save the whole 1920x720 map to F (BMP), then exit
+//     --map-shot F      developer tool: save the whole 3840x2160 map to F (BMP), then exit
 //     --frames N        quit after N frames (smoke tests)
 //     --screenshot F    with --frames: save the last view frame to F (BMP)
 //
@@ -27,6 +27,7 @@
 #include "core/hash.hpp"
 #include "core/map.hpp"
 #include "core/mapgen.hpp"
+#include "core/terrain.hpp"
 #include "game/map_view.hpp"
 
 namespace {
@@ -86,13 +87,16 @@ struct World {
 
 bool new_map(World& world, MapView& view, std::uint64_t seed) {
     const Uint64 start = SDL_GetTicksNS();
-    world.map = generate_stage1(seed, world.params);
+    world.map = generate_map(seed, world.params);
     world.gen_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
-    const GenStats& s = world.map.stats;
-    SDL_Log("map seed 0x%016llx: stage 1 in %.2f ms (attempt %d, zone try %d%s)",
-            static_cast<unsigned long long>(seed), world.gen_ms, s.stage1_attempts, s.zone_tries,
-            s.stage1_fallback ? ", FALLBACK" : "");
-    return view.set_map(world.map);
+    const Map& m = world.map;
+    const bool ok = view.set_map(m);
+    SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
+            "%d,%d; %zu spawns",
+            static_cast<unsigned long long>(seed), world.gen_ms, m.stats.attempts,
+            m.stats.fallback ? ", FALLBACK" : "", view.bake_ms(), m.core ? m.core->x : -1,
+            m.core ? m.core->y : -1, m.spawns.size());
+    return ok;
 }
 
 bool save_target(SDL_Renderer* r, const char* path) {
@@ -150,10 +154,16 @@ bool refresh_screen(SDL_Renderer* r, Screen& s) {
     return true;
 }
 
-CameraPos centred_on(const Rect& zone, ViewSize view) {
-    const int cx = (zone.x * 2 + zone.w) * kCellPx / 2;
-    const int cy = (zone.y * 2 + zone.h) * kCellPx / 2;
+CameraPos centred_on(const Rect& area, ViewSize view) {
+    const int cx = (area.x * 2 + area.w) * kCellPx / 2;
+    const int cy = (area.y * 2 + area.h) * kCellPx / 2;
     return clamp_camera({cx - view.w / 2, cy - view.h / 2}, view);
+}
+
+// The core's cells (or the map's centre if there's no core).
+Rect core_rect(const Map& map) {
+    return map.core ? Rect{map.core->x, map.core->y, kCoreSize, kCoreSize}
+                    : Rect{kMapW / 2, kMapH / 2, 1, 1};
 }
 
 // Steps the zoom by `delta` (positive = closer), keeping the world point under (px, py) in place.
@@ -172,26 +182,20 @@ void zoom_by(SDL_Renderer* r, Screen& s, CameraPos& cam, int delta, int px, int 
 
 void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) {
     char line[160];
-    const char* terrain = "";
-    if (world.map.terrain.in_bounds(hover)) {
-        switch (world.map.terrain.at(hover)) {
-        case Terrain::Ground:
-            terrain = "ground";
-            break;
-        case Terrain::High:
-            terrain = "high";
-            break;
-        case Terrain::Rock:
-            terrain = "rock";
-            break;
-        case Terrain::Cliff:
-            terrain = "cliff";
-            break;
-        }
+    char ground[64] = "";
+    const Map& m = world.map;
+    if (m.height.in_bounds(hover)) {
+        static constexpr const char* kNames[kMaterials] = {"dust", "gravel", "ash", "rust"};
+        const char* what = is_formation(m, hover)                    ? "rock formation"
+                           : is_cliff_cell(m, hover, world.params)   ? "cliff"
+                           : footprint_ok(m, hover, 1, world.params) ? "buildable"
+                                                                     : "";
+        std::snprintf(ground, sizeof ground, "h%d %s %s", m.height.at(hover),
+                      kNames[static_cast<int>(m.material.at(hover))], what);
     }
     std::snprintf(line, sizeof line, "seed %016llx  zoom %dx %dx%d  gen %.1fms  cell %d,%d %s",
-                  static_cast<unsigned long long>(world.map.seed), s.scale, s.view.w, s.view.h,
-                  world.gen_ms, hover.x, hover.y, terrain);
+                  static_cast<unsigned long long>(m.seed), s.scale, s.view.w, s.view.h,
+                  world.gen_ms, hover.x, hover.y, ground);
     const SDL_FRect strip{0.0f, 0.0f, static_cast<float>(s.view.w), 10.0f};
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
@@ -200,7 +204,7 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) 
     SDL_RenderDebugText(r, 2.0f, 1.0f, line);
 }
 
-// Developer tool: renders the whole map once into a 1920x720 target and saves it.
+// Developer tool: renders the whole map once into a 3840x2160 target and saves it.
 int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const char* path) {
     World world;
     MapView view(r);
@@ -270,7 +274,7 @@ int main(int argc, char** argv) {
         if (!new_map(world, view, first_seed) || !refresh_screen(renderer, screen)) {
             exit_code = 1;
         }
-        CameraPos cam = centred_on(world.map.zone, screen.view);
+        CameraPos cam = centred_on(core_rect(world.map), screen.view);
 
         pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
         Uint64 last = SDL_GetTicksNS();
@@ -296,7 +300,7 @@ int main(int argc, char** argv) {
                             running = false;
                             exit_code = 1;
                         }
-                        cam = centred_on(world.map.zone, screen.view);
+                        cam = centred_on(core_rect(world.map), screen.view);
                     } else if (e.key.key == SDLK_EQUALS || e.key.key == SDLK_KP_PLUS) {
                         zoom_by(renderer, screen, cam, 1, screen.out_w / 2, screen.out_h / 2);
                     } else if (e.key.key == SDLK_MINUS || e.key.key == SDLK_KP_MINUS) {

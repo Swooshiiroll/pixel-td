@@ -15,16 +15,19 @@ TEST_CASE("the view fills the window, rounded up") {
 
 TEST_CASE("zoom steps for common windows") {
     // {closest, standard, farthest}
-    CHECK(zoom_limits(1920, 1080) == ZoomLimits{4, 3, 2});
-    CHECK(zoom_limits(1366, 768) == ZoomLimits{3, 2, 2}); // 1x would be taller than the map
-    CHECK(zoom_limits(2560, 1440) == ZoomLimits{5, 4, 2});
-    CHECK(zoom_limits(1280, 720) == ZoomLimits{3, 2, 1}); // 1x shows exactly the map's height
+    // The map is 3840 x 2160, so every common window can zoom out to 1x.
+    CHECK(zoom_limits(1920, 1080) == ZoomLimits{4, 3, 1});
+    CHECK(zoom_limits(1366, 768) == ZoomLimits{3, 2, 1});
+    CHECK(zoom_limits(2560, 1440) == ZoomLimits{5, 4, 1});
+    CHECK(zoom_limits(1280, 720) == ZoomLimits{3, 2, 1});
+    CHECK(zoom_limits(3840, 2160) == ZoomLimits{7, 6, 1}); // 1x shows exactly the whole map
 }
 
 TEST_CASE("small and odd windows") {
     CHECK(zoom_limits(600, 300) == ZoomLimits{2, 1, 1}); // smaller than 640x360: 1x, what fits
-    // 4000 x 800: 2x would show 2000 px, wider than the 1920 px map, so the standard steps in.
-    CHECK(zoom_limits(4000, 800) == ZoomLimits{4, 3, 3});
+    // 8000 x 800: 2x would show 4000 px, wider than the 3840 px map, so the standard steps in.
+    CHECK(zoom_limits(8000, 800) == ZoomLimits{4, 3, 3});
+    CHECK(zoom_limits(4000, 800) == ZoomLimits{3, 2, 2}); // 1x (4000 px) is wider than the map
     CHECK(zoom_limits(0, 0) == ZoomLimits{2, 1, 1});
 }
 
@@ -34,9 +37,9 @@ TEST_CASE("the camera stays inside the map") {
     CHECK(clamp_camera({5000, 5000}, v) == CameraPos{kMapPxW - 640, kMapPxH - 360});
     CHECK(clamp_camera({100, 200}, v) == CameraPos{100, 200});
     // A view as tall as the map can't move vertically.
-    CHECK(clamp_camera({300, 50}, ViewSize{1280, 720}) == CameraPos{300, 0});
+    CHECK(clamp_camera({300, 50}, ViewSize{1280, kMapPxH}) == CameraPos{300, 0});
     // Wider than the map: centred.
-    CHECK(clamp_camera({300, 50}, ViewSize{2000, 400}) == CameraPos{-40, 50});
+    CHECK(clamp_camera({300, 50}, ViewSize{4000, 400}) == CameraPos{-80, 50});
 }
 
 TEST_CASE("zooming keeps the world point under the cursor") {

@@ -6,10 +6,11 @@
 
 namespace pixeltd {
 
-// The world is a grid of 12 px cells (design/world.md): 160 x 60 cells, 1920 x 720 px.
+// The world sits on a hidden grid of 12 px cells (design/world.md): 320 x 180 cells, 3840 x 2160
+// px. The terrain is drawn seamless; the grid is for placement and pathfinding.
 inline constexpr int kCellPx = 12;
-inline constexpr int kMapW = 160;
-inline constexpr int kMapH = 60;
+inline constexpr int kMapW = 320;
+inline constexpr int kMapH = 180;
 inline constexpr int kMapPxW = kMapW * kCellPx;
 inline constexpr int kMapPxH = kMapH * kCellPx;
 
