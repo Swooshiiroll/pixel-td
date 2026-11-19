@@ -11,3 +11,4 @@ them under its version (see CLAUDE.md, "Releasing").
 - README and CLAUDE.md link the project board and the workflow page (#1).
 - Design docs for review: game overview, world layout and map generator, tower system (#3).
 - Map generator: a seeded 3840x2160 heightmap drawn seamless (brightness = height, hue = material) with mesas, cliff faces and towering rock formations; the core placed by the seed in the central third and 3 seeded spawns (edge or inside, opening at waves 1, 10, 20); camera with whole-number pan and zoom; developer seed tools (`--seed`, F5, `--map-shot`) (#5).
+- Line of sight and range over the height field (terrain blocks direct fire and sight, rock formations block every shot, lobbed shots arc over terrain; range grows with height above the target); explored-ground fog that hides spawns until found; developer probes (P, `--probe X,Y`) with a reach-and-sight preview (#7).
