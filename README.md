@@ -27,10 +27,11 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
 
 - **Camera:** pan with WASD, the arrow keys, the window edges or a right-drag. Zoom with the
   mouse wheel, or with + and -.
-- **Keys:** F5 makes a new random map (developer tool). Esc quits.
+- **Keys:** F5 makes a new random map, and P toggles probe placement (left-click places a probe that shows a light tower's reach and sight and lifts the fog); both are developer tools. Esc quits.
 - **Developer flags:**
   - `--seed N` uses seed N (decimal, or hex with `0x`).
-  - `--map-shot f.bmp` saves the whole 3840x2160 map and exits.
+  - `--map-shot f.bmp` saves the whole 3840x2160 map and exits (fully explored, unless probes are given).
+  - `--probe X,Y` places a probe with its top-left at cell X,Y (repeatable).
   - `--frames N --screenshot f.bmp` renders N frames, saves the last view and exits.
 
 See `design/world.md`, Developer tools.

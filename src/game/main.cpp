@@ -2,14 +2,18 @@
 // where the scale is a whole number, then shown at that scale: pixels stay square and crisp at
 // every zoom step, and the view always fills the window (design/world.md, Camera).
 //
-//   PixelTD [--seed N] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
+//   PixelTD [--seed N] [--probe X,Y]... [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
-//     --map-shot F      developer tool: save the whole 3840x2160 map to F (BMP), then exit
+//     --probe X,Y       developer tool: place a probe with its top-left at cell X,Y (repeatable)
+//     --map-shot F      developer tool: save the whole 3840x2160 map to F (BMP), then exit. With
+//                       no probes everything is shown explored; with probes, the fog is shown.
 //     --frames N        quit after N frames (smoke tests)
 //     --screenshot F    with --frames: save the last view frame to F (BMP)
 //
 // Controls: pan with WASD / arrows / the window edges / right-drag; zoom with the mouse wheel or
-// + and -; F5 makes a new random map (developer tool); Esc quits.
+// + and -; P toggles probe placement and a left-click places one (developer tools: a probe is a
+// light tower's sight and reach, to try out line of sight and fog); F5 makes a new random map
+// (developer tool); Esc quits.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -19,12 +23,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include "core/camera.hpp"
 #include "core/fixed_step.hpp"
+#include "core/fog.hpp"
 #include "core/gen_params.hpp"
 #include "core/grid.hpp"
 #include "core/hash.hpp"
+#include "core/los.hpp"
 #include "core/map.hpp"
 #include "core/mapgen.hpp"
 #include "core/terrain.hpp"
@@ -39,6 +46,7 @@ constexpr std::int64_t kTickNs = 1'000'000'000 / 60;
 constexpr int kMaxTicksPerFrame = 8;
 constexpr int kPanPerTick = 18;  // window pixels per tick, the same speed at every zoom
 constexpr float kEdgePan = 8.0f; // window points from the edge that start edge panning
+constexpr SDL_Color kProbeColour{250, 220, 120, 200};
 
 struct Options {
     long frames = 0;
@@ -46,7 +54,24 @@ struct Options {
     const char* map_shot = nullptr;
     bool has_seed = false;
     std::uint64_t seed = 0;
+    std::vector<Cell> probes;
 };
+
+// Parses "X,Y" into a cell. False on anything else.
+bool parse_cell(const char* text, Cell& out) {
+    char* end = nullptr;
+    const long x = std::strtol(text, &end, 10);
+    if (end == text || *end != ',') {
+        return false;
+    }
+    const char* rest = end + 1;
+    const long y = std::strtol(rest, &end, 10);
+    if (end == rest || *end != '\0') {
+        return false;
+    }
+    out = Cell{static_cast<int>(x), static_cast<int>(y)};
+    return true;
+}
 
 bool parse_options(int argc, char** argv, Options& out) {
     for (int i = 1; i < argc; ++i) {
@@ -65,9 +90,16 @@ bool parse_options(int argc, char** argv, Options& out) {
                 std::fprintf(stderr, "--seed takes a number (decimal or 0x hex)\n");
                 return false;
             }
+        } else if (std::strcmp(argv[i], "--probe") == 0 && has_value) {
+            Cell c;
+            if (!parse_cell(argv[++i], c)) {
+                std::fprintf(stderr, "--probe takes a cell as X,Y\n");
+                return false;
+            }
+            out.probes.push_back(c);
         } else {
-            std::fprintf(stderr, "usage: PixelTD [--seed N] [--map-shot file.bmp] [--frames N] "
-                                 "[--screenshot file.bmp]\n");
+            std::fprintf(stderr, "usage: PixelTD [--seed N] [--probe X,Y]... [--map-shot file.bmp] "
+                                 "[--frames N] [--screenshot file.bmp]\n");
             return false;
         }
     }
@@ -82,15 +114,51 @@ std::uint64_t random_seed() {
 struct World {
     Map map;
     GenParams params;
+    Fog fog;
+    std::vector<Cell> probes; // top-left cells of placed probes (2x2, like a light tower)
     double gen_ms = 0.0;
+
+    [[nodiscard]] int probe_range_px() const noexcept { return params.light_range_cells * kCellPx; }
 };
+
+// A probe can go where a light tower could: flat, buildable ground, off the core and other probes.
+bool probe_fits(const World& world, Cell top_left) {
+    if (!footprint_ok(world.map, top_left, kLightSize, world.params)) {
+        return false;
+    }
+    const Rect probe{top_left.x, top_left.y, kLightSize, kLightSize};
+    const auto overlaps = [&](Cell c, int size) {
+        return probe.x < c.x + size && c.x < probe.x + probe.w && probe.y < c.y + size &&
+               c.y < probe.y + probe.h;
+    };
+    if (world.map.core && overlaps(*world.map.core, kCoreSize)) {
+        return false;
+    }
+    return std::none_of(world.probes.begin(), world.probes.end(),
+                        [&](Cell c) { return overlaps(c, kLightSize); });
+}
+
+// Places a probe and lifts the fog it sees. False if it doesn't fit there.
+bool place_probe(World& world, MapView& view, Cell top_left) {
+    if (!probe_fits(world, top_left)) {
+        return false;
+    }
+    world.probes.push_back(top_left);
+    const Rect lifted = world.fog.explore_from(world.map, centre_of(top_left, kLightSize),
+                                               world.probe_range_px(), world.params);
+    view.update(world.map, world.fog, lifted);
+    return true;
+}
 
 bool new_map(World& world, MapView& view, std::uint64_t seed) {
     const Uint64 start = SDL_GetTicksNS();
     world.map = generate_map(seed, world.params);
     world.gen_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
+    world.probes.clear();
+    world.fog.reset();
+    world.fog.explore_core(world.map, world.params.light_range_cells);
     const Map& m = world.map;
-    const bool ok = view.set_map(m);
+    const bool ok = view.set_map(m, world.fog);
     SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
             "%d,%d; %zu spawns",
             static_cast<unsigned long long>(seed), world.gen_ms, m.stats.attempts,
@@ -180,8 +248,8 @@ void zoom_by(SDL_Renderer* r, Screen& s, CameraPos& cam, int delta, int px, int 
     cam = clamp_camera(zoom_about(cam, old_scale, s.scale, px, py), s.view);
 }
 
-void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) {
-    char line[160];
+void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover, bool probe_mode) {
+    char line[192];
     char ground[64] = "";
     const Map& m = world.map;
     if (m.height.in_bounds(hover)) {
@@ -193,9 +261,10 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) 
         std::snprintf(ground, sizeof ground, "h%d %s %s", m.height.at(hover),
                       kNames[static_cast<int>(m.material.at(hover))], what);
     }
-    std::snprintf(line, sizeof line, "seed %016llx  zoom %dx %dx%d  gen %.1fms  cell %d,%d %s",
+    std::snprintf(line, sizeof line, "seed %016llx  zoom %dx %dx%d  gen %.1fms  cell %d,%d %s%s",
                   static_cast<unsigned long long>(m.seed), s.scale, s.view.w, s.view.h,
-                  world.gen_ms, hover.x, hover.y, ground);
+                  world.gen_ms, hover.x, hover.y, ground,
+                  probe_mode ? "  [PROBE: click to place]" : "");
     const SDL_FRect strip{0.0f, 0.0f, static_cast<float>(s.view.w), 10.0f};
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
@@ -205,11 +274,22 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover) 
 }
 
 // Developer tool: renders the whole map once into a 3840x2160 target and saves it.
-int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const char* path) {
+int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const std::vector<Cell>& probes,
+                 const char* path) {
     World world;
     MapView view(r);
     if (!new_map(world, view, seed)) {
         return 1;
+    }
+    if (probes.empty()) {
+        world.fog.explore_all();
+        view.update(world.map, world.fog, Rect{0, 0, kMapW, kMapH});
+    }
+    for (const Cell c : probes) {
+        if (!place_probe(world, view, c)) {
+            SDL_Log("probe at %d,%d doesn't fit (not flat buildable ground, or overlapping)", c.x,
+                    c.y);
+        }
     }
     SDL_Texture* full =
         SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, kMapPxW, kMapPxH);
@@ -218,7 +298,10 @@ int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const char* path) {
         return 1;
     }
     SDL_SetRenderTarget(r, full);
-    view.draw({0, 0}, {kMapPxW, kMapPxH});
+    view.draw({0, 0}, {kMapPxW, kMapPxH}, world.fog);
+    for (const Cell c : world.probes) {
+        view.draw_probe({0, 0}, c, kProbeColour);
+    }
     const bool ok = save_target(r, path);
     SDL_SetRenderTarget(r, nullptr);
     SDL_DestroyTexture(full);
@@ -259,7 +342,7 @@ int main(int argc, char** argv) {
 
     const std::uint64_t first_seed = opts.has_seed ? opts.seed : random_seed();
     if (opts.map_shot != nullptr) {
-        const int code = run_map_shot(renderer, first_seed, opts.map_shot);
+        const int code = run_map_shot(renderer, first_seed, opts.probes, opts.map_shot);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -274,7 +357,15 @@ int main(int argc, char** argv) {
         if (!new_map(world, view, first_seed) || !refresh_screen(renderer, screen)) {
             exit_code = 1;
         }
+        for (const Cell c : opts.probes) {
+            if (!place_probe(world, view, c)) {
+                SDL_Log("probe at %d,%d doesn't fit (not flat buildable ground, or overlapping)",
+                        c.x, c.y);
+            }
+        }
         CameraPos cam = centred_on(core_rect(world.map), screen.view);
+        bool probe_mode = false;
+        Cell hover{};
 
         pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
         Uint64 last = SDL_GetTicksNS();
@@ -301,6 +392,8 @@ int main(int argc, char** argv) {
                             exit_code = 1;
                         }
                         cam = centred_on(core_rect(world.map), screen.view);
+                    } else if (e.key.key == SDLK_P) {
+                        probe_mode = !probe_mode;
                     } else if (e.key.key == SDLK_EQUALS || e.key.key == SDLK_KP_PLUS) {
                         zoom_by(renderer, screen, cam, 1, screen.out_w / 2, screen.out_h / 2);
                     } else if (e.key.key == SDLK_MINUS || e.key.key == SDLK_KP_MINUS) {
@@ -333,6 +426,11 @@ int main(int argc, char** argv) {
                         drag_x -= static_cast<float>(dx) * s;
                         drag_y -= static_cast<float>(dy) * s;
                         cam = clamp_camera({cam.x - dx, cam.y - dy}, screen.view);
+                    }
+                    break;
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    if (probe_mode && e.button.button == SDL_BUTTON_LEFT) {
+                        place_probe(world, view, hover);
                     }
                     break;
                 default:
@@ -390,14 +488,25 @@ int main(int argc, char** argv) {
                 cam = clamp_camera({cam.x + dx, cam.y + dy}, screen.view);
             }
 
-            const Cell hover{(cam.x + static_cast<int>(mx * density) / screen.scale) / kCellPx,
-                             (cam.y + static_cast<int>(my * density) / screen.scale) / kCellPx};
+            // The cell under the cursor; in probe mode, the probe's top-left so the cursor sits
+            // on its centre.
+            const int wx = cam.x + static_cast<int>(mx * density) / screen.scale;
+            const int wy = cam.y + static_cast<int>(my * density) / screen.scale;
+            hover = probe_mode ? Cell{(wx - kCellPx / 2) / kCellPx, (wy - kCellPx / 2) / kCellPx}
+                               : Cell{wx / kCellPx, wy / kCellPx};
 
             SDL_SetRenderTarget(renderer, screen.target);
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);
-            view.draw(cam, screen.view);
-            draw_hud(renderer, world, screen, hover);
+            view.draw(cam, screen.view, world.fog);
+            for (const Cell c : world.probes) {
+                view.draw_probe(cam, c, kProbeColour);
+            }
+            if (probe_mode) {
+                view.draw_probe_preview(cam, world.map, world.params, hover,
+                                        probe_fits(world, hover), world.probe_range_px());
+            }
+            draw_hud(renderer, world, screen, hover, probe_mode);
 
             ++frame;
             const bool last_frame = opts.frames > 0 && frame >= opts.frames;
