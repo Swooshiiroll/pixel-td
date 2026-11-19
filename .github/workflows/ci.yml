@@ -101,9 +101,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
-      # Linux: compiled objects (SDL3 included) come from ccache. Windows uses the Visual Studio
+      # Linux: compiled objects (SDL3 included) come from ccache. SDL's precompiled header is off
+      # here because ccache can't cache compiles that use one. Windows uses the Visual Studio
       # generator, which ccache doesn't support, so it compiles everything each run.
-      PIXELTD_CMAKE_ARGS: ${{ matrix.platform == 'linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || '' }}
+      PIXELTD_CMAKE_ARGS: ${{ matrix.platform == 'linux' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON' || '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Package list
