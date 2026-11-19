@@ -31,9 +31,7 @@ struct NoiseIntKey {
     int NoiseSpec::* field;
 };
 
-constexpr std::array<NoiseKey, 4> kNoise = {{
-    {"height", &GenParams::height},
-    {"mesa_noise", &GenParams::mesa_noise},
+constexpr std::array<NoiseKey, 2> kNoise = {{
     {"formation_rough", &GenParams::formation_rough},
     {"material_noise", &GenParams::material_noise},
 }};
@@ -52,33 +50,19 @@ struct Entry {
     const char* section;
     IntKey key;
 };
-constexpr std::array<Entry, 27> kInts = {{
-    {"Height", {"ground_max", &GenParams::ground_max}},
-    {"Mesas", {"mesa_share_pct", &GenParams::mesa_share_pct}},
-    {nullptr, {"mesa_band", &GenParams::mesa_band}},
-    {nullptr, {"mesa_feather_cells", &GenParams::mesa_feather_cells}},
-    {nullptr, {"mesa_relief", &GenParams::mesa_relief}},
-    {"Cliffs and building", {"cliff_step", &GenParams::cliff_step}},
-    {nullptr, {"cliff_share_min_pct", &GenParams::cliff_share_min_pct}},
-    {nullptr, {"cliff_share_max_pct", &GenParams::cliff_share_max_pct}},
-    {nullptr, {"flat_limit", &GenParams::flat_limit}},
+constexpr std::array<Entry, 13> kInts = {{
     {"Rock formations", {"formations_min", &GenParams::formations_min}},
     {nullptr, {"formations_max", &GenParams::formations_max}},
     {nullptr, {"formation_radius_min", &GenParams::formation_radius_min}},
     {nullptr, {"formation_radius_max", &GenParams::formation_radius_max}},
     {nullptr, {"formation_scale_min_pct", &GenParams::formation_scale_min_pct}},
     {nullptr, {"formation_scale_max_pct", &GenParams::formation_scale_max_pct}},
-    {nullptr, {"formation_height_min", &GenParams::formation_height_min}},
     {nullptr, {"formation_share_max_pct", &GenParams::formation_share_max_pct}},
     {"Core", {"core_tries", &GenParams::core_tries}},
     {"Spawns", {"spawn_edge_pct", &GenParams::spawn_edge_pct}},
     {nullptr, {"min_spawn_dist", &GenParams::min_spawn_dist}},
     {nullptr, {"spawn_spacing", &GenParams::spawn_spacing}},
-    {"Towers, sight and range", {"light_range_px", &GenParams::light_range_px}},
-    {nullptr, {"eye_height", &GenParams::eye_height}},
-    {nullptr, {"target_height", &GenParams::target_height}},
-    {nullptr, {"range_pct_per_grade", &GenParams::range_pct_per_grade}},
-    {nullptr, {"range_slope_max_pct", &GenParams::range_slope_max_pct}},
+    {"Towers and range", {"light_range_px", &GenParams::light_range_px}},
     {"Retries", {"attempts", &GenParams::attempts}},
 }};
 

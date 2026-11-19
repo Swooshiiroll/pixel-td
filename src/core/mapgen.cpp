@@ -25,27 +25,6 @@ constexpr std::uint64_t kStreamTerrain = 0x7e11a100ull;
 
 constexpr int kCellCount = kMapW * kMapH;
 
-// Marks about `target` cells with the highest field values (fields in [0, max_value]).
-Mask top_cells(const Grid<int>& field, int max_value, int target) {
-    std::vector<int> histogram(static_cast<std::size_t>(max_value) + 1, 0);
-    for (const int v : field.cells()) {
-        ++histogram[static_cast<std::size_t>(v)];
-    }
-    int threshold = max_value + 1;
-    int count = 0;
-    while (threshold > 0 && count < target) {
-        --threshold;
-        count += histogram[static_cast<std::size_t>(threshold)];
-    }
-    Mask out(kMapW, kMapH, 0);
-    for (int y = 0; y < kMapH; ++y) {
-        for (int x = 0; x < kMapW; ++x) {
-            out.at(x, y) = field.at(x, y) >= threshold ? 1 : 0;
-        }
-    }
-    return out;
-}
-
 template <class T> void shuffle(std::vector<T>& v, Rng& rng) {
     for (std::size_t i = v.size(); i > 1; --i) {
         const std::size_t j = rng.next_below(static_cast<std::uint32_t>(i));
@@ -63,60 +42,8 @@ void normalize(Grid<int>& field, int total_weight) {
     }
 }
 
-// Rolling height from the height noise, stretched to 0..ground_max, with mesa regions terraced
-// into steps (their edges become cliff faces). Terracing fades in over mesa_feather_cells from a
-// mesa region's edge, and each table keeps mesa_relief of the slope under it.
-void make_height(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
-    Grid<int>& field = out.height_sum;
-    fill_noise(field, rng, p.height, &out.octave, &out.octave_weight);
-    const auto [lo_it, hi_it] = std::minmax_element(field.cells().begin(), field.cells().end());
-    const int lo = *lo_it;
-    const int span = std::max(1, *hi_it - lo);
-
-    const int mesa_weight = fill_noise(out.mesa_noise, rng, p.mesa_noise);
-    normalize(out.mesa_noise, mesa_weight);
-    out.mesa = top_cells(out.mesa_noise, 255, kCellCount * p.mesa_share_pct / 100);
-    const Mask& mesa = out.mesa;
-
-    // The feather: each mesa cell's walking distance (4-neighbour steps) from the nearest cell
-    // outside the mesa regions; terracing reaches full strength mesa_feather_cells in.
-    Grid<int> dist(kMapW, kMapH, -1);
-    std::vector<Cell> outside;
-    for (int y = 0; y < kMapH; ++y) {
-        for (int x = 0; x < kMapW; ++x) {
-            if (mesa.at(x, y) == 0) {
-                outside.push_back({x, y});
-            }
-        }
-    }
-    gen::bfs(dist, outside, [&](Cell c) { return mesa.at(c) != 0; });
-    const int feather = p.mesa_feather_cells;
-
-    const int band = std::max(1, p.mesa_band);
-    const int relief = std::clamp(p.mesa_relief, 0, band);
-    for (int y = 0; y < kMapH; ++y) {
-        for (int x = 0; x < kMapW; ++x) {
-            const int smooth =
-                static_cast<int>(static_cast<long long>(field.at(x, y) - lo) * p.ground_max / span);
-            int h = smooth;
-            int blend = 0;
-            if (mesa.at(x, y) != 0) {
-                // A whole-map mesa has no outside cells to measure from: fully terraced.
-                const int d = dist.at(x, y) < 0 ? feather : dist.at(x, y);
-                blend = feather <= 0 ? 256 : std::min(d, feather) * 256 / feather;
-                // The table: its level, centred in the band, plus a compressed copy of the slope.
-                const int level = smooth / band * band;
-                const int terraced = std::min(p.ground_max, level + (band - relief) / 2 +
-                                                                smooth % band * relief / band);
-                h = smooth + (terraced - smooth) * blend / 256;
-            }
-            out.mesa_blend.at(x, y) = blend;
-            map.height.at(x, y) = static_cast<std::uint8_t>(std::clamp(h, 0, p.ground_max));
-        }
-    }
-}
-
-// Rock formations: blobs with noise-shaped edges, standing at formation_height_min..255.
+// Rock formations: blobs with noise-shaped edges. Each cell stores 1..255 from the roughness: how
+// tall the rock stands there (looks only).
 void place_formations(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
     Grid<int>& rough = out.rough;
     normalize(rough, fill_noise(rough, rng, p.formation_rough)); // 0..255
@@ -134,9 +61,7 @@ void place_formations(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
                 const int dx = x - cx;
                 const int dy = y - cy;
                 if ((dx * dx + dy * dy) * 100 <= r * r * scale) {
-                    map.formation.at(x, y) = 1;
-                    map.height.at(x, y) = static_cast<std::uint8_t>(
-                        p.formation_height_min + n * (255 - p.formation_height_min) / 255);
+                    map.formation.at(x, y) = static_cast<std::uint8_t>(1 + n * 254 / 255);
                 }
             }
         }
@@ -156,47 +81,37 @@ void paint_materials(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
 
 bool shares_ok(const Map& map, const GenParams& p) {
     int formation = 0;
-    int cliff = 0;
-    for (int y = 0; y < kMapH; ++y) {
-        for (int x = 0; x < kMapW; ++x) {
-            formation += map.formation.at(x, y) != 0 ? 1 : 0;
-            cliff += is_cliff_cell(map, {x, y}, p) ? 1 : 0;
-        }
+    for (const std::uint8_t f : map.formation.cells()) {
+        formation += f != 0 ? 1 : 0;
     }
-    return formation * 100 <= p.formation_share_max_pct * kCellCount &&
-           cliff * 100 >= p.cliff_share_min_pct * kCellCount &&
-           cliff * 100 <= p.cliff_share_max_pct * kCellCount;
+    return formation * 100 <= p.formation_share_max_pct * kCellCount;
 }
 
 // Every core spot on the subgrid whose cells all lie in the core area and pass placement_ok, in
-// row order. The same result as calling placement_ok for each, but each cell's formation and
-// cliff test runs once, and each block of cells is tested once (a 9-subcell side always covers 5
+// row order. The same result as calling placement_ok for each, but each cell's formation test
+// runs once, and each block of cells is tested once (a 9-subcell side always covers 5
 // cells, so neighbouring subcell positions share blocks).
 std::vector<SubCell> core_spots(const Map& map, const GenParams& p) {
     static_assert(cells_under(SubCell{0, 0}, kCoreSub).w == cells_under(SubCell{1, 1}, kCoreSub).w,
                   "the core must cover the same number of cells at every alignment");
     constexpr int kBlock = cells_under(SubCell{0, 0}, kCoreSub).w;
     const Rect& a = p.core_area;
-    Mask bad(kMapW, kMapH, 0); // formation or cliff, inside the core area
+    Mask bad(kMapW, kMapH, 0); // formation, inside the core area
     for (int y = a.y; y < a.y + a.h; ++y) {
         for (int x = a.x; x < a.x + a.w; ++x) {
-            bad.at(x, y) = is_formation(map, {x, y}) || is_cliff_cell(map, {x, y}, p) ? 1 : 0;
+            bad.at(x, y) = is_formation(map, {x, y}) ? 1 : 0;
         }
     }
     Grid<std::int8_t> block_ok(kMapW, kMapH, -1); // by top-left cell; -1 = not tested yet
     const auto test_block = [&](int bx, int by) {
-        int lo = 255;
-        int hi = 0;
         for (int y = by; y < by + kBlock; ++y) {
             for (int x = bx; x < bx + kBlock; ++x) {
                 if (bad.at(x, y) != 0) {
                     return false;
                 }
-                lo = std::min(lo, static_cast<int>(map.height.at(x, y)));
-                hi = std::max(hi, static_cast<int>(map.height.at(x, y)));
             }
         }
-        return hi - lo <= p.flat_limit;
+        return true;
     };
     std::vector<SubCell> spots;
     const int sx_end = (a.x + a.w) * kSubPerCell;
@@ -216,7 +131,7 @@ std::vector<SubCell> core_spots(const Map& map, const GenParams& p) {
     return spots;
 }
 
-// A spawn's 2x2 block: no formation, reachable, walkable within itself, and far enough away.
+// A spawn's 2x2 block: no formation, reachable, and far enough away.
 bool spawn_spot_ok(const Map& map, const Grid<int>& dist, Cell s, const GenParams& p) {
     for (int y = s.y; y < s.y + 2; ++y) {
         for (int x = s.x; x < s.x + 2; ++x) {
@@ -225,10 +140,7 @@ bool spawn_spot_ok(const Map& map, const Grid<int>& dist, Cell s, const GenParam
             }
         }
     }
-    return dist.at(s) >= p.min_spawn_dist && can_step(map, s, {s.x + 1, s.y}, p) &&
-           can_step(map, s, {s.x, s.y + 1}, p) &&
-           can_step(map, {s.x + 1, s.y + 1}, {s.x + 1, s.y}, p) &&
-           can_step(map, {s.x + 1, s.y + 1}, {s.x, s.y + 1}, p);
+    return dist.at(s) >= p.min_spawn_dist;
 }
 
 // Places the spawns (one per entry in spawn_waves): each on an edge or inside (by the seed),
@@ -275,7 +187,7 @@ bool place_spawns(Map& map, const Grid<int>& dist, Rng& rng, const GenParams& p)
 
 } // namespace
 
-Grid<int> walk_distance_to_core(const Map& map, const GenParams& p) {
+Grid<int> walk_distance_to_core(const Map& map) {
     Grid<int> dist(kMapW, kMapH, -1);
     if (!map.core) {
         return dist;
@@ -298,8 +210,7 @@ Grid<int> walk_distance_to_core(const Map& map, const GenParams& p) {
         const Cell c = queue[head];
         for (const Cell d : kDirs) {
             const Cell n{c.x + d.x, c.y + d.y};
-            if (dist.in_bounds(n) && dist.at(n) < 0 && !core.contains(n) &&
-                can_step(map, c, n, p)) {
+            if (dist.in_bounds(n) && dist.at(n) < 0 && !core.contains(n) && can_step(map, c, n)) {
                 dist.at(n) = dist.at(c) + 1;
                 queue.push_back(n);
             }
@@ -311,7 +222,6 @@ Grid<int> walk_distance_to_core(const Map& map, const GenParams& p) {
 Map make_fallback_map(std::uint64_t seed, const GenParams& p) {
     Map map;
     map.seed = seed;
-    map.height.fill(100);
     map.core_area = p.core_area;
     map.core = SubCell{p.core_area.x * kSubPerCell + (p.core_area.w * kSubPerCell - kCoreSub) / 2,
                        p.core_area.y * kSubPerCell + (p.core_area.h * kSubPerCell - kCoreSub) / 2};
@@ -331,7 +241,6 @@ Map generate_map(std::uint64_t seed, const GenParams& params, GenLayers* layers)
         map.seed = seed;
         map.core_area = p.core_area;
         GenLayers noise;
-        make_height(map, rng, p, noise);
         place_formations(map, rng, p, noise);
         paint_materials(map, rng, p, noise);
         if (!shares_ok(map, p)) {
@@ -342,7 +251,7 @@ Map generate_map(std::uint64_t seed, const GenParams& params, GenLayers* layers)
         const std::size_t tries = std::min(spots.size(), static_cast<std::size_t>(p.core_tries));
         for (std::size_t t = 0; t < tries; ++t) {
             map.core = spots[t];
-            if (place_spawns(map, walk_distance_to_core(map, p), rng, p)) {
+            if (place_spawns(map, walk_distance_to_core(map), rng, p)) {
                 map.stats.attempts = attempt + 1;
                 if (layers != nullptr) {
                     noise.valid = true;

@@ -2,17 +2,16 @@
 
 #include <cstdint>
 
-#include "core/gen_params.hpp"
 #include "core/grid.hpp"
 #include "core/los.hpp"
 #include "core/map.hpp"
 
 namespace pixeltd {
 
-// Explored ground (design/world.md, Visibility). The terrain is always visible; unexplored ground
-// is hazed, and spawns and enemies on it are hidden. Cells get explored around the core at run
-// start, and by towers within their reach and direct sight. Enemies don't explore. Once explored,
-// a cell stays explored.
+// Explored ground (design/world.md, Visibility). The ground and formations are always visible;
+// unexplored ground is hazed, and spawns and enemies on it are hidden. Cells get explored around
+// the core at run start, and by towers within their reach and direct sight. Enemies don't explore.
+// Once explored, a cell stays explored.
 class Fog {
   public:
     Fog() : explored_(kMapW, kMapH, 0) {}
@@ -26,10 +25,10 @@ class Fog {
     // (Euclidean, to its nearest point). Returns the bounding box of the cells explored.
     Rect explore_core(const Map& map, int range_px);
 
-    // A viewer (tower or probe) standing at `centre` with base range `base_px` explores every cell
-    // within its reach for that cell's ground (in_reach: range by grade) that it can see. Returns
-    // the bounding box of newly explored cells (empty if none).
-    Rect explore_from(const Map& map, PointPx centre, int base_px, const GenParams& p);
+    // A viewer (tower or probe) standing at `centre` with range `range_px` explores every cell
+    // within that circle that it can see (rock formations block sight). Returns the bounding box of
+    // newly explored cells (empty if none).
+    Rect explore_from(const Map& map, PointPx centre, int range_px);
 
     [[nodiscard]] bool explored(Cell c) const noexcept {
         return explored_.in_bounds(c) && explored_.at(c) != 0;

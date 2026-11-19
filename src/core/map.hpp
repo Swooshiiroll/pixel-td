@@ -36,9 +36,9 @@ struct GenStats {
 struct Map {
     std::uint64_t seed = 0;
 
-    // Per cell: ground height (0-200; rock formations stand at 210-255), material, and whether
-    // the cell is part of a rock formation (1) or not (0).
-    Grid<std::uint8_t> height{kMapW, kMapH, 0};
+    // Per cell: the ground's material, and rock formations. The ground is flat (#30). A formation
+    // cell holds 1..255, how tall the rock stands there (looks only: shading and shadows); open
+    // ground is 0.
     Grid<Material> material{kMapW, kMapH, Material::Dust};
     Grid<std::uint8_t> formation{kMapW, kMapH, 0};
 

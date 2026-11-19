@@ -2,22 +2,20 @@
 
 #include <cstdint>
 
-#include "core/gen_params.hpp"
 #include "core/grid.hpp"
 #include "core/map.hpp"
 
 namespace pixeltd {
 
-// Line of sight and range over the height field (design/world.md, Line of sight and range):
-// - direct fire and sight are blocked where the terrain rises above the line from the tower's eye
-//   (its ground + eye_height) to the target (its ground + target_height), and by rock formations;
-// - lobbed shots arc over terrain; only rock formations block them;
+// Line of sight and range (design/world.md, Line of sight and range). The ground is flat (#30):
+// - sight and direct fire are blocked by rock formations;
+// - lobbed shots arc over them: nothing blocks a lobbed shot;
 // - sight is always direct, so a lobbed tower needs a spotter;
-// - range grows with height above the target and shrinks when shooting uphill.
+// - a tower's reach is a plain circle of its range, the same everywhere.
 
 enum class Shot : std::uint8_t { Direct, Lobbed };
 
-// A position in world pixels (the map is 3840 x 2160).
+// A position in world pixels (the map is 15360 x 8640).
 struct PointPx {
     int x = 0;
     int y = 0;
@@ -46,40 +44,21 @@ struct RectPx {
     return {top_left.x * kSubPx, top_left.y * kSubPx, size_sub * kSubPx, size_sub * kSubPx};
 }
 
-// The ground height under a world-pixel position (the height of the cell it's in).
-[[nodiscard]] int ground_at(const Map& map, PointPx p) noexcept;
-
-// True if nothing blocks a shot of this kind from `from` to `to` (both on the ground; the eye and
-// target heights are added). The line is walked cell by cell, centre to centre; where it passes
-// exactly through a cell corner, both cells beside it count. Integer maths only.
-[[nodiscard]] bool clear_shot(const Map& map, PointPx from, PointPx to, Shot shot,
-                              const GenParams& p) noexcept;
+// True if nothing blocks a shot of this kind from `from` to `to`. For direct fire (and sight) the
+// line is walked cell by cell, and any rock formation cell on it blocks, apart from the shooter's
+// and the target's own cells; where it passes exactly through a cell corner, both cells beside it
+// count. Lobbed shots are never blocked. Integer maths only.
+[[nodiscard]] bool clear_shot(const Map& map, PointPx from, PointPx to, Shot shot) noexcept;
 
 // Sight: always direct.
-[[nodiscard]] inline bool can_see(const Map& map, PointPx from, PointPx to,
-                                  const GenParams& p) noexcept {
-    return clear_shot(map, from, to, Shot::Direct, p);
+[[nodiscard]] inline bool can_see(const Map& map, PointPx from, PointPx to) noexcept {
+    return clear_shot(map, from, to, Shot::Direct);
 }
 
-// The integer square root: the largest r with r * r <= v (0 for v <= 0).
-[[nodiscard]] int isqrt(long long v) noexcept;
-
-// Range by grade (design/world.md, Line of sight and range; #27). The reach depends on how the
-// ground falls or rises between a tower and its target, not on how high the tower stands:
-// - the grade is the fall per cell, (tower_ground - target_ground) * 16 / distance_px height units
-//   (a distance under one cell counts as one cell), positive downhill;
-// - the range changes by grade * range_pct_per_grade %, at most +-range_slope_max_pct.
-// Flat ground at any altitude gives the base range. Integer maths only.
-[[nodiscard]] int effective_range(int base_px, int tower_ground, int target_ground, int distance_px,
-                                  const GenParams& p) noexcept;
-
-// True if a target (dx, dy) world pixels from the tower is within its reach for those grounds.
-[[nodiscard]] bool in_reach(int base_px, int tower_ground, int target_ground, long long dx,
-                            long long dy, const GenParams& p) noexcept;
-
-// The farthest any target can be: the base range stretched by the full downhill bonus.
-[[nodiscard]] inline int max_reach(int base_px, const GenParams& p) noexcept {
-    return base_px * (100 + p.range_slope_max_pct) / 100;
+// True if a target (dx, dy) world pixels from the tower is within its reach: a circle of radius
+// range_px.
+[[nodiscard]] constexpr bool in_reach(int range_px, long long dx, long long dy) noexcept {
+    return dx * dx + dy * dy <= static_cast<long long>(range_px) * range_px;
 }
 
 } // namespace pixeltd

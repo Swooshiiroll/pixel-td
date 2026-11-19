@@ -25,22 +25,6 @@ bool in_byte_range(const Grid<int>& g) {
     return *lo >= 0 && *hi <= 255;
 }
 
-// Distance (4-neighbour steps) from cell c to the nearest cell outside the mesa mask.
-int edge_distance(const GenLayers& L, Cell c) {
-    for (int d = 1; d < kW; ++d) {
-        for (int dy = -d; dy <= d; ++dy) {
-            const int dx = d - std::abs(dy);
-            for (const int sx : {dx, -dx}) {
-                const Cell n{c.x + sx, c.y + dy};
-                if (L.mesa.in_bounds(n) && L.mesa.at(n) == 0) {
-                    return d;
-                }
-            }
-        }
-    }
-    return -1;
-}
-
 } // namespace
 
 TEST_CASE("default noise is exactly the noise before #21") {
@@ -174,62 +158,24 @@ TEST_CASE("octave rules: lacunarity shrinks the steps, persistence the weights")
     CHECK(w1 == std::array<int, 3>{4096, 0, 0}); // octaves past the count weigh nothing
 }
 
-TEST_CASE("mesas: terracing fades in from the edge, and tables keep gentle relief") {
-    const GenParams p;
-    REQUIRE(p.mesa_feather_cells == 8);
-    REQUIRE(p.mesa_relief == 6);
-    for (std::uint64_t seed : {1ull, 2ull, 3ull}) {
-        CAPTURE(seed);
-        GenLayers L;
-        const Map m = generate_map(seed, p, &L);
-        REQUIRE(L.valid);
-        int checked = 0;
-        bool blend_ok = true;
-        bool table_ok = true;
-        for (int y = 0; y < kMapH; y += 3) {
-            for (int x = 0; x < kMapW; x += 3) {
-                if (L.mesa.at(x, y) == 0) {
-                    continue;
-                }
-                const int d = edge_distance(L, {x, y});
-                const int want = d < 0 ? 256 : std::min(d, 8) * 256 / 8;
-                blend_ok = blend_ok && L.mesa_blend.at(x, y) == want;
-                ++checked;
-                // Deep inside (fully terraced) and not a formation: the table's height sits in
-                // its band's middle (20 - 6) / 2 = 7 .. 7 + 6.
-                if (L.mesa_blend.at(x, y) == 256 && m.formation.at(x, y) == 0 &&
-                    m.height.at(x, y) < p.ground_max) {
-                    const int offset = m.height.at(x, y) % p.mesa_band;
-                    table_ok = table_ok && offset >= 7 && offset <= 7 + 6;
-                }
-            }
-        }
-        CHECK(checked > 100);
-        CHECK(blend_ok);
-        CHECK(table_ok);
-    }
-}
-
 TEST_CASE("validate: defaults are already valid; wild values are clamped") {
     GenParams p;
     CHECK(validate(p) == 0);
     CHECK(p == GenParams{});
     GenParams w;
-    w.height.octaves = 99;
-    w.height.step = 0;
-    w.mesa_relief = 500;
+    w.material_noise.octaves = 99;
+    w.material_noise.step = 0;
     w.formations_max = -3;
     w.core_area = Rect{-10, 500, 2, 2};
-    w.height.curve = static_cast<Curve>(9);
+    w.material_noise.curve = static_cast<Curve>(9);
     CHECK(validate(w) > 0);
-    CHECK(w.height.octaves == kMaxOctaves);
-    CHECK(w.height.step == 2);
-    CHECK(w.mesa_relief == w.mesa_band);
+    CHECK(w.material_noise.octaves == kMaxOctaves);
+    CHECK(w.material_noise.step == 2);
     CHECK(w.formations_max >= w.formations_min);
     CHECK(w.core_area.x >= 0);
     CHECK(w.core_area.x + w.core_area.w <= kMapW);
     CHECK(w.core_area.y + w.core_area.h <= kMapH);
-    CHECK(w.height.curve == Curve::Smoothstep);
+    CHECK(w.material_noise.curve == Curve::Smoothstep);
     CHECK(validate(w) == 0); // stable
 }
 
@@ -240,7 +186,7 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
     for (std::uint64_t seed = 0; seed < 20; ++seed) {
         CAPTURE(seed);
         GenParams p;
-        for (NoiseSpec* n : {&p.height, &p.mesa_noise, &p.formation_rough, &p.material_noise}) {
+        for (NoiseSpec* n : {&p.formation_rough, &p.material_noise}) {
             n->step = pick(2, 160);
             n->octaves = pick(1, kMaxOctaves);
             n->lacunarity_pct = pick(10, 100);
@@ -250,12 +196,9 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
             n->warp_cells = pick(0, 1) == 0 ? 0 : pick(1, 64);
             n->warp_step = pick(2, 160);
         }
-        p.mesa_share_pct = pick(0, 100);
-        p.mesa_band = pick(1, 60);
-        p.mesa_feather_cells = pick(0, 32);
-        p.mesa_relief = pick(0, 60);
-        p.formations_min = pick(0, 20);
-        p.formations_max = pick(0, 30);
+        p.formations_min = pick(0, 300);
+        p.formations_max = pick(0, 400);
+        p.formation_share_max_pct = pick(5, 30);
         p.attempts = 4; // keep the sweep quick: hard settings fall back sooner
         validate(p);
         GenLayers L;
@@ -267,7 +210,7 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
             CHECK_FALSE(L.valid);
         } else {
             CHECK(L.valid);
-            CHECK(placement_ok(m, *m.core, kCoreSub, p));
+            CHECK(placement_ok(m, *m.core, kCoreSub));
         }
     }
     MESSAGE("fuzz fallbacks: ", fallbacks, " / 20");

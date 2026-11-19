@@ -5,76 +5,25 @@
 
 namespace pixeltd {
 
-int ground_at(const Map& map, PointPx p) noexcept {
-    const int cx = std::clamp(p.x / kCellPx, 0, kMapW - 1);
-    const int cy = std::clamp(p.y / kCellPx, 0, kMapH - 1);
-    return map.height.at(cx, cy);
-}
-
-int isqrt(long long v) noexcept {
-    if (v <= 0) {
-        return 0;
+bool clear_shot(const Map& map, PointPx from, PointPx to, Shot shot) noexcept {
+    if (shot == Shot::Lobbed) {
+        return true; // lobbed shots arc over rock formations
     }
-    // Newton's method on integers, from an estimate above the root.
-    long long r = v;
-    long long next = (r + 1) / 2;
-    while (next < r) {
-        r = next;
-        next = (r + v / r) / 2;
-    }
-    return static_cast<int>(r);
-}
-
-int effective_range(int base_px, int tower_ground, int target_ground, int distance_px,
-                    const GenParams& p) noexcept {
-    // pct = grade * pct_per_grade, with grade = fall * 16 / distance: one division, so it
-    // rounds once (towards zero).
-    const long long fall = tower_ground - target_ground;
-    const long long dist = std::max(distance_px, kCellPx);
-    const long long raw = fall * kCellPx * p.range_pct_per_grade / dist;
-    const long long cap = p.range_slope_max_pct;
-    const int pct = static_cast<int>(std::clamp(raw, -cap, cap));
-    return base_px * (100 + pct) / 100;
-}
-
-bool in_reach(int base_px, int tower_ground, int target_ground, long long dx, long long dy,
-              const GenParams& p) noexcept {
-    const long long d2 = dx * dx + dy * dy;
-    const long long r = effective_range(base_px, tower_ground, target_ground, isqrt(d2), p);
-    return d2 <= r * r;
-}
-
-bool clear_shot(const Map& map, PointPx from, PointPx to, Shot shot, const GenParams& p) noexcept {
-    const long long eye = ground_at(map, from) + p.eye_height;
-    const long long aim = ground_at(map, to) + p.target_height;
     const long long dx = to.x - from.x;
     const long long dy = to.y - from.y;
-    const long long len2 = dx * dx + dy * dy;
     const int start_x = from.x / kCellPx;
     const int start_y = from.y / kCellPx;
     const int end_x = to.x / kCellPx;
     const int end_y = to.y / kCellPx;
 
-    // Does cell (cx, cy) block? Formations block every shot. For direct fire, terrain blocks if
-    // it's higher than the line where the line passes the cell's centre. The shooter's and the
-    // target's own cells never block.
+    // Does cell (cx, cy) block? Rock formations do; the shooter's and the target's own cells never
+    // block.
     const auto blocks = [&](int cx, int cy) {
-        if (!map.height.in_bounds(cx, cy) || (cx == start_x && cy == start_y) ||
+        if (!map.formation.in_bounds(cx, cy) || (cx == start_x && cy == start_y) ||
             (cx == end_x && cy == end_y)) {
             return false;
         }
-        if (map.formation.at(cx, cy) != 0) {
-            return true;
-        }
-        if (shot == Shot::Lobbed || len2 == 0) {
-            return false;
-        }
-        // How far along the line (0..len2) the cell's centre lies, then the line's height there.
-        const long long px = cx * kCellPx + kCellPx / 2 - from.x;
-        const long long py = cy * kCellPx + kCellPx / 2 - from.y;
-        const long long t = std::clamp(px * dx + py * dy, 0LL, len2);
-        const long long line = eye + (aim - eye) * t / len2;
-        return map.height.at(cx, cy) > line;
+        return map.formation.at(cx, cy) != 0;
     };
 
     // A grid walk along the segment (Amanatides & Woo), comparing the distances to the next

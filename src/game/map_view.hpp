@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "core/camera.hpp"
-#include "core/contours.hpp"
 #include "core/fog.hpp"
 #include "core/gen_params.hpp"
 #include "core/grid.hpp"
@@ -36,12 +35,11 @@ struct DrawXf {
 };
 
 // Draws a generated map (issue #25). The terrain is one texture with a texel per cell (960 x 540,
-// about 2 MB at any map size): each cell gets a colour (brightness from height, hill shading, muted
-// material hue, formation shadows), and the GPU stretches it with linear filtering, so each pixel
-// blends the four nearest cell centres: seamless, with nothing baked at full size. The fog is a
-// second cell texture. The elevation overlay adds contour lines (core/contours). The core, spawns
-// and probes are drawn over it each frame. Colours are placeholders until the style board settles
-// the art.
+// about 2 MB at any map size): each cell gets a colour (the flat ground's material hue, or a rock
+// formation shaded by its height, with its shadow), and the GPU stretches it with linear filtering,
+// so each pixel blends the four nearest cell centres: seamless, with nothing baked at full size.
+// The fog is a second cell texture. The core, spawns and probes are drawn over it each frame.
+// Colours are placeholders until the style board settles the art.
 class MapView {
   public:
     explicit MapView(SDL_Renderer* renderer);
@@ -54,7 +52,7 @@ class MapView {
     bool set_map(const Map& map, const GenLayers& layers, const Fog& fog);
 
     // Switches the developer overlay (issue #13) and recolours the cells: Off shows the terrain,
-    // Elevation colour bands with contours, the rest a noise layer in greyscale.
+    // the others a noise layer in greyscale.
     bool set_overlay(Overlay overlay, const Map& map, const GenLayers& layers, const Fog& fog);
     [[nodiscard]] Overlay overlay() const noexcept { return overlay_; }
 
@@ -71,10 +69,10 @@ class MapView {
     void draw(const DrawXf& xf, ViewSize view, const Fog& fog) const;
 
     // Developer probe preview: a light-tower-sized probe at `top_left` (yellow if it can go there,
-    // red if not), with the cells it would reach and see tinted and the rest of its possible
-    // reach shaded.
-    void draw_probe_preview(const DrawXf& xf, const Map& map, const GenParams& p, SubCell top_left,
-                            bool legal, int base_px) const;
+    // red if not), with the cells in its range it can see tinted and those hidden behind rock
+    // formations shaded.
+    void draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_left, bool legal,
+                            int range_px) const;
 
     // A placed probe.
     void draw_probe(const DrawXf& xf, SubCell top_left, SDL_Color colour) const;
@@ -95,7 +93,6 @@ class MapView {
     std::vector<std::array<float, 3>> cell_; // each cell's colour (terrain or overlay)
     std::vector<std::uint8_t> terrain_px_;   // ...as RGBA, for the upload
     std::vector<std::uint8_t> fog_px_;       // RGBA, one texel per cell
-    Contours contours_;                      // the elevation overlay's lines (else empty)
     std::optional<SubCell> core_;
     std::vector<Spawn> spawns_;
     double bake_ms_ = 0.0;

@@ -18,19 +18,10 @@ int count_explored(const Fog& fog) {
     return static_cast<int>(std::count(c.begin(), c.end(), std::uint8_t{1}));
 }
 
-void fill(Map& m, Rect r, int height) {
-    for (int y = r.y; y < r.y + r.h; ++y) {
-        for (int x = r.x; x < r.x + r.w; ++x) {
-            m.height.at(x, y) = static_cast<std::uint8_t>(height);
-        }
-    }
-}
-
 } // namespace
 
 TEST_CASE("run start explores the ground around the core") {
-    const GenParams p;
-    Map m = make_fallback_map(1, p);
+    Map m = make_fallback_map(1);
     m.core = SubCell{300, 160}; // px 2400..2472 x 1280..1352, cells 150..154 x 80..84
     Fog fog;
     const Rect box = fog.explore_core(m, 72);
@@ -48,62 +39,57 @@ TEST_CASE("run start explores the ground around the core") {
     CHECK(box.contains(Rect{146, 76, 13, 13}));
 }
 
-TEST_CASE("towers explore what they can see over the terrain") {
-    const GenParams p;
-    Map m = make_fallback_map(1, p);
-    fill(m, {15, 0, 1, kMapH}, 120); // a ridge at x = 15
+TEST_CASE("towers explore what they can see, within a circle") {
+    Map m = make_fallback_map(1);
     const PointPx tower = centre_of(Cell{10, 10});
-    const int base = 8 * kCellPx;
+    const int range = 8 * kCellPx;
 
-    SUBCASE("low ground: the ridge blocks its sight") {
+    SUBCASE("open ground: a circle of its range") {
         Fog fog;
-        fog.explore_from(m, tower, base, p);
-        CHECK(fog.explored({12, 10}));
-        CHECK_FALSE(fog.explored({17, 10}));
+        fog.explore_from(m, tower, range);
+        CHECK(fog.explored({18, 10})); // 128 px: on the edge
+        CHECK_FALSE(fog.explored({19, 10}));
+        CHECK(fog.explored({15, 15}));       // 80 and 80: 113 px
+        CHECK_FALSE(fog.explored({16, 16})); // 96 and 96: 136 px
     }
-    SUBCASE("high ground sees over it, and further") {
-        fill(m, {9, 9, 3, 3}, 160);
-        Fog fog;
-        fog.explore_from(m, tower, base, p);
-        // (The ground right at the plateau's foot is dead ground: the edge hides it.)
-        CHECK(fog.explored({17, 10}));
-        // A fall of 60 off the plateau: the grade (60 over 12 cells is 5 per cell) caps the stretch
-        // at +50%, so 12 cells reach; at 13 cells the grade drops (+46%, 11.6 cells).
-        CHECK(fog.explored({20, 10}));
-        CHECK(fog.explored({22, 10}));
-        CHECK_FALSE(fog.explored({23, 10}));
-    }
-    SUBCASE("rock formations block high ground too") {
-        fill(m, {9, 9, 3, 3}, 160);
+    SUBCASE("a wall of rock blocks its sight") {
         for (int y = 0; y < kMapH; ++y) {
-            m.formation.at(15, y) = 1;
+            m.formation.at(15, y) = 120;
         }
         Fog fog;
-        fog.explore_from(m, tower, base, p);
-        CHECK(fog.explored({11, 10})); // its own plateau
+        fog.explore_from(m, tower, range);
+        CHECK(fog.explored({12, 10}));
+        CHECK(fog.explored({15, 10})); // the rock face itself is seen
         CHECK_FALSE(fog.explored({17, 10}));
+        CHECK(fog.explored({10, 3})); // its own side, other ways
+    }
+    SUBCASE("a single rock casts a sight shadow") {
+        m.formation.at(13, 10) = 1;
+        Fog fog;
+        fog.explore_from(m, tower, range);
+        CHECK_FALSE(fog.explored({16, 10})); // straight behind it
+        CHECK(fog.explored({16, 14}));       // off to the side
     }
 }
 
 TEST_CASE("explored ground stays explored; spawns and enemies are hidden until then") {
-    const GenParams p;
-    Map m = make_fallback_map(1, p);
+    Map m = make_fallback_map(1);
     Fog fog;
-    const Rect first = fog.explore_from(m, centre_of(Cell{30, 30}), 6 * kCellPx, p);
+    const Rect first = fog.explore_from(m, centre_of(Cell{30, 30}), 6 * kCellPx);
     const int after_first = count_explored(fog);
     CHECK(after_first > 0);
     CHECK(first.w > 0);
-    const Rect again = fog.explore_from(m, centre_of(Cell{30, 30}), 6 * kCellPx, p);
+    const Rect again = fog.explore_from(m, centre_of(Cell{30, 30}), 6 * kCellPx);
     CHECK(again.w == 0);
     CHECK(count_explored(fog) == after_first);
-    fog.explore_from(m, centre_of(Cell{36, 30}), 6 * kCellPx, p);
+    fog.explore_from(m, centre_of(Cell{36, 30}), 6 * kCellPx);
     CHECK(count_explored(fog) > after_first);
     CHECK(fog.visible({30, 30}));
     CHECK_FALSE(fog.visible({200, 150}));
     CHECK_FALSE(fog.visible({-1, 0}));
     const Spawn s{{60, 30}, false, 1};
     CHECK_FALSE(fog.spawn_found(s));
-    fog.explore_from(m, centre_of(Cell{61, 31}), 2 * kCellPx, p);
+    fog.explore_from(m, centre_of(Cell{61, 31}), 2 * kCellPx);
     CHECK(fog.spawn_found(s));
 }
 
@@ -141,7 +127,7 @@ TEST_CASE("generation bench (manual)" * doctest::skip()) {
         fog.explore_core(m, p.light_range_px);
         for (int i = 0; i < 8; ++i) {
             const SubCell c{m.core->x - 40 + 12 * i, m.core->y + 20};
-            fog.explore_from(m, centre_of(c, kLightSub), p.light_range_px, p);
+            fog.explore_from(m, centre_of(c, kLightSub), p.light_range_px);
         }
         const auto t2 = clock::now();
         const double g = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -152,11 +138,9 @@ TEST_CASE("generation bench (manual)" * doctest::skip()) {
         fog_max = std::max(fog_max, f);
     }
     MESSAGE("generate_map avg ", gen_total / kMaps, " ms, max ", gen_max, " ms");
-    // The same with every layer domain-warped and the height at 6 octaves.
+    // The same with every layer domain-warped.
     GenParams heavy = p;
-    heavy.height.octaves = 6;
-    for (NoiseSpec* n :
-         {&heavy.height, &heavy.mesa_noise, &heavy.formation_rough, &heavy.material_noise}) {
+    for (NoiseSpec* n : {&heavy.formation_rough, &heavy.material_noise}) {
         n->warp_cells = 16;
     }
     double heavy_total = 0.0;
@@ -166,6 +150,6 @@ TEST_CASE("generation bench (manual)" * doctest::skip()) {
         heavy_total += std::chrono::duration<double, std::milli>(clock::now() - t0).count();
         CHECK(m.core.has_value());
     }
-    MESSAGE("generate_map, 6 octaves + warp on every layer: avg ", heavy_total / 30, " ms");
+    MESSAGE("generate_map, warp on every layer: avg ", heavy_total / 30, " ms");
     MESSAGE("fog (core + 8 viewers) avg ", fog_total / kMaps, " ms, max ", fog_max, " ms");
 }

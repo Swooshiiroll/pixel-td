@@ -31,7 +31,7 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - F5 makes a new random map;
   - P toggles probe placement (a left-click places a probe that shows a light tower's reach and
     sight, and lifts the fog);
-  - O and Shift+O step through the overlays (elevation, and the generator's noise layers);
+  - O and Shift+O step through the overlays (the formation roughness and material noise layers);
   - F hides and shows the fog;
   - Tab opens the map-tuning panel (seed, every generator and noise setting, live stats, presets).
 - **Developer flags:**
@@ -42,7 +42,7 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - `--no-fog` starts with the fog hidden.
   - `--window WxH` opens the window at that size (for screenshots).
   - `--preset FILE` generates with the settings in a preset file; `--panel` opens the tuning panel at start.
-  - `--overlay NAME` starts in an overlay: `elevation`, `octave1`, `octave2`, `octave3`, `height`, `mesa`, `rough` or `material`.
+  - `--overlay NAME` starts in an overlay: `rough` or `material`.
   - `--frames N --screenshot f.bmp` renders N frames, saves the last frame and exits.
 
 See `design/world.md`, Developer tools.
