@@ -12,8 +12,9 @@ int ground_at(const Map& map, PointPx p) noexcept {
 }
 
 int effective_range(int base_px, int tower_ground, int target_ground, const GenParams& p) noexcept {
-    const int pct = std::clamp((tower_ground - target_ground) * p.range_pct_per_10 / 10,
-                               -p.range_penalty_max_pct, p.range_bonus_max_pct);
+    // Downhill the bonus grows with the drop, with no cap; uphill the penalty has a floor.
+    const int pct = std::max((tower_ground - target_ground) * p.range_pct_per_10 / 10,
+                             -p.range_penalty_max_pct);
     return base_px * (100 + pct) / 100;
 }
 

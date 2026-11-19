@@ -18,7 +18,7 @@ struct GenParams {
     // edges become cliff faces.
     int mesa_noise_step = 48;
     int mesa_share_pct = 30; // share of the map that's terraced
-    int mesa_band = 40;      // height between terrace levels
+    int mesa_band = 20;      // height between terrace levels (still a cliff: > cliff_step)
 
     // --- Cliffs and building.
     int cliff_step = 12;         // a height step bigger than this between neighbours is a cliff
@@ -52,8 +52,8 @@ struct GenParams {
     int light_range_px = 72;        // a light tower's base range (4.5 cells)
     int eye_height = 10;            // a tower sees and shoots from this far above its ground
     int target_height = 4;          // ...at a point this far above the target's ground
-    int range_pct_per_10 = 5;       // range change per 10 height units above (or below) the target
-    int range_bonus_max_pct = 50;   // shooting down: at most this much longer
+    int range_pct_per_10 = 5;       // range change per 10 height units above (or below) the target;
+                                    // shooting down, it keeps growing with the drop (no cap)
     int range_penalty_max_pct = 25; // shooting up: at most this much shorter
 
     // --- Retries.

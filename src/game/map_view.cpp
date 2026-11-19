@@ -446,7 +446,7 @@ void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, const GenPara
     const int tower = ground_at(map, centre);
     // Within the farthest possible reach: cells it reaches and sees get a light tint; the rest are
     // shaded, so the reach's real (non-circular) shape and blocked sight lines show.
-    const int reach = base_px * (100 + p.range_bonus_max_pct) / 100;
+    const int reach = max_reach(base_px, tower, p);
     const long long reach2 = static_cast<long long>(reach) * reach;
     for (int cy = (centre.y - reach) / kCellPx; cy <= (centre.y + reach) / kCellPx; ++cy) {
         for (int cx = (centre.x - reach) / kCellPx; cx <= (centre.x + reach) / kCellPx; ++cx) {

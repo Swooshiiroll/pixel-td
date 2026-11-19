@@ -50,8 +50,8 @@ Rect Fog::explore_core(const Map& map, int range_px) {
 Rect Fog::explore_from(const Map& map, PointPx centre, int base_px, const GenParams& p) {
     Rect box{};
     const int tower = ground_at(map, centre);
-    // The farthest any cell could be in reach: the base range plus the biggest height bonus.
-    const int reach = base_px * (100 + p.range_bonus_max_pct) / 100;
+    // The farthest any cell could be in reach: against the lowest possible ground.
+    const int reach = max_reach(base_px, tower, p);
     const int x0 = std::max(0, (centre.x - reach) / kCellPx);
     const int y0 = std::max(0, (centre.y - reach) / kCellPx);
     const int x1 = std::min(kMapW - 1, (centre.x + reach) / kCellPx);

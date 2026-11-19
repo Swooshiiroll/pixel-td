@@ -25,14 +25,19 @@ constexpr std::array<OverlayInfo, kOverlayCount> kInfo = {{
     {"material", "material noise"},
 }};
 
-// Deep blue, teal, green, yellow, orange, red-brown at heights 0, 40, 80, 120, 160, 200.
-constexpr std::array<Rgb8, 6> kStops = {{
-    {24, 40, 110},
-    {32, 128, 140},
-    {70, 160, 70},
-    {220, 205, 80},
-    {225, 140, 50},
-    {150, 60, 40},
+// One stop every 20 height units, 0 to 200.
+constexpr std::array<Rgb8, 11> kStops = {{
+    {24, 40, 110},  // 0 deep blue
+    {28, 72, 150},  // 20 blue
+    {32, 128, 140}, // 40 teal
+    {48, 150, 110}, // 60 sea green
+    {70, 160, 70},  // 80 green
+    {150, 185, 70}, // 100 yellow-green
+    {220, 205, 80}, // 120 yellow
+    {228, 175, 62}, // 140 amber
+    {225, 140, 50}, // 160 orange
+    {195, 98, 44},  // 180 red-orange
+    {150, 60, 40},  // 200 red-brown
 }};
 
 constexpr std::uint8_t lerp(std::uint8_t a, std::uint8_t b, int f, int n) {

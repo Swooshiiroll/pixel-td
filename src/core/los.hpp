@@ -62,9 +62,14 @@ struct RectPx {
 }
 
 // A tower's range (world pixels) against a target, from its base range and the two ground heights:
-// +range_pct_per_10 % per 10 units it stands above the target, capped at +range_bonus_max_pct,
+// +range_pct_per_10 % per 10 units it stands above the target, growing with the drop (no cap),
 // and the same reduction uphill, down to -range_penalty_max_pct.
 [[nodiscard]] int effective_range(int base_px, int tower_ground, int target_ground,
                                   const GenParams& p) noexcept;
+
+// The farthest a tower on `tower_ground` could reach: its range against a target at height 0.
+[[nodiscard]] inline int max_reach(int base_px, int tower_ground, const GenParams& p) noexcept {
+    return effective_range(base_px, tower_ground, 0, p);
+}
 
 } // namespace pixeltd
