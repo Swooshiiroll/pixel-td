@@ -115,13 +115,15 @@ runs the unit tests only when the push changes a system or object (`tools/ci-sco
   advances in fixed 60 Hz ticks (`FixedStep`). Never use wall-clock time or `rand()` in the sim.
 - **Pixel-perfect view:** the world is drawn 1:1 in world pixels into a render target. The window
   shows it at a whole-number scale, and you never draw at a fractional scale. The one exception is
-  zooming out past 1x (to 1/2 and the whole map): those steps draw shrunk, smooth copies.
+  zooming out past 1x (halving steps, then the whole map): those steps draw shrunk and smooth.
+  The terrain is one cell-sized texture (one colour per cell, ~2 MB at any map size) stretched by
+  the GPU with linear filtering, so it's seamless; never bake a full-size picture of the map.
   - **Grid:** a hidden grid of 16 px cells for terrain, line of sight and pathfinding; the terrain
     itself is drawn seamless (no tiles or grid lines). Towers and the core snap to an 8 px
     placement subgrid: a light tower is 3x3 subcells (24 px), a heavy tower 6x6 (48 px), and the
     core 9x9 (72 px).
-  - **Map:** 320x180 cells (5120x2880 px), a heightmap.
-  - **Zoom:** whole-number steps, then 1/2 and the whole map. The view fills the window at
+  - **Map:** 960x540 cells (15360x8640 px), a heightmap.
+  - **Zoom:** whole-number steps, then halving steps and the whole map. The view fills the window at
     whole-number steps, and the default zoom shows about 640x360. See `design/world.md`.
   - **Pure maths stays in `src/core`.** That covers `core/camera.hpp`, and the front end only
     feeds it window sizes.
