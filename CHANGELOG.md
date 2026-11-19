@@ -10,3 +10,4 @@ them under its version (see CLAUDE.md, "Releasing").
 - Engine skeleton: SDL3 window with a pixel-perfect 640x360 view (32 px tiles, whole-number scaling), fixed 60 Hz simulation clock, PCG32 seeded RNG, doctest unit tests.
 - README and CLAUDE.md link the project board and the workflow page (#1).
 - Design docs for review: game overview, world layout and map generator, tower system (#3).
+- Map generator: a seeded 3840x2160 heightmap drawn seamless (brightness = height, hue = material) with mesas, cliff faces and towering rock formations; the core placed by the seed in the central third and 3 seeded spawns (edge or inside, opening at waves 1, 10, 20); camera with whole-number pan and zoom; developer seed tools (`--seed`, F5, `--map-shot`) (#5).
