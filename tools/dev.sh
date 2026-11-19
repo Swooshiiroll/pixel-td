@@ -3,12 +3,14 @@
 #   tools/dev.sh <command> [args]
 #
 #   setup               install or fetch what the project needs (once on a fresh checkout)
-#   check               static checks: lint/format, version consistent
-#   test [args]         unit tests (CI runs them as the unit-tests check)
+#   check               static checks: lint/format, version consistent, warnings-as-errors build
+#   test [args]         unit tests (CI runs them inside the check job)
 #   build               build into build/ (CI uploads it as the test-build artifact)
 #   version <x.y.z>     set the version everywhere (VERSION and CMakeLists.txt's project() line)
 #
 # Logs go to out/. Exit code 0 = pass.
+# PIXELTD_CMAKE_ARGS adds arguments to the CMake configure step in setup (CI uses it for a
+# core-only build, -DPIXELTD_BUILD_GAME=OFF, and the ccache compiler launchers).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p out build
@@ -41,7 +43,10 @@ configured() { [ -f "$CMAKE_DIR/CMakeCache.txt" ]; }
 stack_setup() {
   local gen=(-G Ninja -DCMAKE_BUILD_TYPE=Release)
   is_windows && gen=(-A x64)
-  "$CMAKE" -S . -B "$CMAKE_DIR" "${gen[@]}" -DPIXELTD_WERROR=ON -DBUILD_TESTING=ON
+  local extra=()
+  # Word-split on purpose: PIXELTD_CMAKE_ARGS holds several -D arguments.
+  read -r -a extra <<< "${PIXELTD_CMAKE_ARGS:-}"
+  "$CMAKE" -S . -B "$CMAKE_DIR" "${gen[@]}" -DPIXELTD_WERROR=ON -DBUILD_TESTING=ON "${extra[@]}"
 }
 
 stack_check() {
@@ -135,5 +140,5 @@ case "$cmd" in
     echo "version $v" ;;
 
   help|*)
-    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

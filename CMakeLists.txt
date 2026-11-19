@@ -10,6 +10,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# No C++20 modules here: skip CMake's per-file module scan (faster builds, and ccache can cache
+# the compiles; it can't with the scan on).
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # Static MSVC runtime: the exe runs without the player installing the VC++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
