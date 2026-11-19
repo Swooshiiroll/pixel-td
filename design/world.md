@@ -207,6 +207,13 @@ are launch flags and keys for development, not settings in the game.
 - `--zoom whole|half|N` starts at the whole-map step, the 1/2 step, or the whole-number scale N.
 - **Probes** (P, or `--probe X,Y` in subcells) and **overlays** (O, `--overlay NAME`): see #12 and
   #13.
+- **Map-tuning panel** (Tab; `--panel` opens it at start): the seed (hex box, previous, next,
+  random), every generator number including each noise layer's octaves, curve, shape and warp, live
+  stats (attempts, fallback, timings, cliff, formation and buildable shares, spawn walks) and
+  presets. While a slider is dragged the map regenerates with a fast 320 x 180 preview; letting go
+  redraws it fully. Presets are settings only, saved by name to `presets/<name>.txt` next to the
+  game; `--preset FILE` generates with one at start (also for map shots). Making a preset the
+  defaults is a pull request (#23).
 
 The test arena will get proper seed entry later.
 

@@ -16,6 +16,7 @@ them under its version (see CLAUDE.md, "Releasing").
 - The map is 5120x2880 (2x2 1440p screens) on 16 px cells, with towers and the core snapping to an 8 px placement subgrid (sizes unchanged); zooming out continues past 1x to 1/2 and the whole map, drawn smooth; F hides and shows the fog (developer tool), and the fog is now its own layer, so lifting it no longer re-bakes the terrain (#15).
 - Tuning: the downhill range bonus has no cap (it grows with the drop, +5% per 10 height units); mesas terrace every 20 height units instead of 40; the elevation overlay has a colour stop every 20 units (#19).
 - Smoother mesas (terracing fades in over 8 cells from a mesa's edge, and table tops keep up to 6 units of the slope under them, so they stay buildable); every noise layer gets tunable octaves (count, size, lacunarity, persistence), curve, domain warp and shape; generator presets as text (settings only) (#21).
+- Map-tuning panel (Tab, developer tool, Dear ImGui 1.93.0): seed, every generator and noise setting with a live low-detail preview while dragging, live stats, and named presets (settings only); `--preset FILE` and `--panel` (#23).
 
 ### Changed
 - Faster CI: the check and unit-test jobs are merged into one core-only job (no SDL), and tools, apt packages and compiled objects are cached between runs; the unit tests only run when a push changes a system or object (#17).

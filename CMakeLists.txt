@@ -44,6 +44,23 @@ if(PIXELTD_BUILD_GAME)
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     EXCLUDE_FROM_ALL)
   FetchContent_MakeAvailable(SDL3)
+
+  # Dear ImGui (developer tuning panel, #23): no CMake project of its own, so it's built below as
+  # pixeltd_imgui with the SDL3 platform and SDL_Renderer backends.
+  FetchContent_Declare(imgui
+    URL https://github.com/ocornut/imgui/archive/refs/tags/v1.93.0.tar.gz
+    URL_HASH SHA256=f7bf6bc76e5d79d40d751096663e6c5d18daf08129dd52e7f7b09e4251c8eeee
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  FetchContent_MakeAvailable(imgui)
+  add_library(pixeltd_imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+  target_include_directories(pixeltd_imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+  target_link_libraries(pixeltd_imgui PUBLIC SDL3::SDL3-static)
 endif()
 
 if(BUILD_TESTING)
