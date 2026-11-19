@@ -2,6 +2,7 @@
 add_executable(pixeltd_tests
   test_main.cpp
   test_camera.cpp
+  test_contours.cpp
   test_fixed_step.cpp
   test_fog.cpp
   test_los.cpp

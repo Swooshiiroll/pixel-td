@@ -2,11 +2,9 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <utility>
 #include <vector>
 
 #include "core/los.hpp"
@@ -34,82 +32,47 @@ constexpr std::uint8_t kHazeG = 62;
 constexpr std::uint8_t kHazeB = 80;
 constexpr std::uint8_t kHazeAlpha = 115; // 0.45 * 255
 
+// Contour lines: minor and major (every 50 units) alpha, and the zoom below which only majors show.
+constexpr std::uint8_t kMinorAlpha = 70;
+constexpr std::uint8_t kMajorAlpha = 150;
+constexpr float kMinorLinesFrom = 0.25f;
+
 constexpr std::size_t cell_index(int x, int y) noexcept {
     return static_cast<std::size_t>(y) * static_cast<std::size_t>(kMapW) +
            static_cast<std::size_t>(x);
 }
 
-constexpr std::size_t pixel_bytes(int w, int h) noexcept {
-    return static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u;
-}
-
-// Averages 2x2 pixel blocks of an RGBA image (w x h, both even) into one half the size.
-void halve(const std::vector<std::uint8_t>& in, int w, int h, std::vector<std::uint8_t>& out) {
-    const int hw = w / 2;
-    const int hh = h / 2;
-    const auto at = [&](int x, int y) {
-        return (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
-                static_cast<std::size_t>(x)) *
-               4u;
-    };
-    for (int y = 0; y < hh; ++y) {
-        for (int x = 0; x < hw; ++x) {
-            const std::size_t a = at(2 * x, 2 * y);
-            const std::size_t b = at(2 * x + 1, 2 * y);
-            const std::size_t c = at(2 * x, 2 * y + 1);
-            const std::size_t d = at(2 * x + 1, 2 * y + 1);
-            const std::size_t o = (static_cast<std::size_t>(y) * static_cast<std::size_t>(hw) +
-                                   static_cast<std::size_t>(x)) *
-                                  4u;
-            for (std::size_t ch = 0; ch < 4; ++ch) {
-                out[o + ch] = static_cast<std::uint8_t>(
-                    (in[a + ch] + in[b + ch] + in[c + ch] + in[d + ch] + 2) / 4);
-            }
-        }
-    }
+constexpr std::size_t cell_bytes() noexcept {
+    return static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH) * 4u;
 }
 
 } // namespace
 
 MapView::MapView(SDL_Renderer* renderer)
-    : renderer_(renderer), pixels_(pixel_bytes(kMapPxW, kMapPxH), 0),
-      half_(pixel_bytes(kMapPxW / 2, kMapPxH / 2), 0),
-      quarter_(pixel_bytes(kMapPxW / 4, kMapPxH / 4), 0),
-      cell_(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH)),
-      fog_px_(pixel_bytes(kMapW, kMapH), 0) {}
+    : renderer_(renderer), cell_(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH)),
+      terrain_px_(cell_bytes(), 0), fog_px_(cell_bytes(), 0) {}
 
 MapView::~MapView() {
-    for (SDL_Texture* t : terrain_) {
-        if (t != nullptr) {
-            SDL_DestroyTexture(t);
-        }
+    if (terrain_ != nullptr) {
+        SDL_DestroyTexture(terrain_);
     }
     if (fog_ != nullptr) {
         SDL_DestroyTexture(fog_);
     }
-    if (preview_ != nullptr) {
-        SDL_DestroyTexture(preview_);
-    }
 }
 
 bool MapView::create_textures() {
-    const std::array<std::array<int, 2>, kTerrainLevels> sizes = {
-        {{kMapPxW, kMapPxH}, {kMapPxW / 2, kMapPxH / 2}, {kMapPxW / 4, kMapPxH / 4}}};
-    for (std::size_t i = 0; i < terrain_.size(); ++i) {
-        terrain_[i] = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
-                                        sizes[i][0], sizes[i][1]);
-        if (terrain_[i] == nullptr) {
-            SDL_Log("terrain texture %zu failed: %s", i, SDL_GetError());
-            return false;
-        }
-    }
+    // Both are one texel per cell, stretched by the GPU with linear filtering: each pixel blends
+    // the four nearest cell centres, so the terrain (and the haze) is seamless at any size.
+    terrain_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kMapW,
+                                 kMapH);
     fog_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kMapW,
                              kMapH);
-    if (fog_ == nullptr) {
-        SDL_Log("fog texture failed: %s", SDL_GetError());
+    if (terrain_ == nullptr || fog_ == nullptr) {
+        SDL_Log("map textures failed: %s", SDL_GetError());
         return false;
     }
-    // Linear: the haze blends smoothly between cell centres, like the terrain.
+    SDL_SetTextureScaleMode(terrain_, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureScaleMode(fog_, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureBlendMode(fog_, SDL_BLENDMODE_BLEND);
     return true;
@@ -117,80 +80,60 @@ bool MapView::create_textures() {
 
 bool MapView::set_map(const Map& map, const GenLayers& layers, const Fog& fog) {
     const Uint64 start = SDL_GetTicksNS();
-    if (terrain_[0] == nullptr && !create_textures()) {
+    if (terrain_ == nullptr && !create_textures()) {
         return false;
     }
     core_ = map.core;
     spawns_ = map.spawns;
-    previewing_ = false;
     fill_cells(map, layers);
-    const bool ok = render(map) && update_fog(fog, Rect{0, 0, kMapW, kMapH});
+    contours_ = overlay_ == Overlay::Elevation ? build_contours(map.height) : Contours{};
+    const bool ok = upload_terrain() && update_fog(fog, Rect{0, 0, kMapW, kMapH});
     bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
     return ok;
-}
-
-bool MapView::set_preview(const Map& map, const GenLayers& layers, const Fog& fog) {
-    if (terrain_[0] == nullptr && !create_textures()) {
-        return false;
-    }
-    if (preview_ == nullptr) {
-        preview_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
-                                     kMapW, kMapH);
-        if (preview_ == nullptr) {
-            SDL_Log("preview texture failed: %s", SDL_GetError());
-            return false;
-        }
-        SDL_SetTextureScaleMode(preview_, SDL_SCALEMODE_LINEAR);
-        preview_px_.assign(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH) * 4u,
-                           0);
-    }
-    core_ = map.core;
-    spawns_ = map.spawns;
-    fill_cells(map, layers);
-    for (int y = 0; y < kMapH; ++y) {
-        for (int x = 0; x < kMapW; ++x) {
-            const std::size_t i = cell_index(x, y);
-            std::uint8_t* out = preview_px_.data() + i * 4u;
-            if (overlay_ == Overlay::Elevation) {
-                const Rgb8 c = elevation_colour(map.height.at(x, y));
-                out[0] = c.r;
-                out[1] = c.g;
-                out[2] = c.b;
-            } else {
-                for (std::size_t ch = 0; ch < 3; ++ch) {
-                    out[ch] = static_cast<std::uint8_t>(std::clamp(cell_[i][ch], 0.0f, 255.0f));
-                }
-            }
-            out[3] = 255;
-        }
-    }
-    previewing_ = true;
-    const bool ok = SDL_UpdateTexture(preview_, nullptr, preview_px_.data(), kMapW * 4);
-    if (!ok) {
-        SDL_Log("preview upload failed: %s", SDL_GetError());
-    }
-    return update_fog(fog, Rect{0, 0, kMapW, kMapH}) && ok;
 }
 
 bool MapView::set_overlay(Overlay overlay, const Map& map, const GenLayers& layers,
                           const Fog& fog) {
     (void)fog; // the fog is its own layer; an overlay doesn't change it
-    if (terrain_[0] == nullptr) {
-        overlay_ = overlay; // applied by the first set_map
-        return true;
+    overlay_ = overlay;
+    if (terrain_ == nullptr) {
+        return true; // applied by the first set_map
     }
     const Uint64 start = SDL_GetTicksNS();
-    overlay_ = overlay;
-    previewing_ = false;
     fill_cells(map, layers);
-    const bool ok = render(map);
+    contours_ = overlay_ == Overlay::Elevation ? build_contours(map.height) : Contours{};
+    const bool ok = upload_terrain();
     bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
     return ok;
 }
 
+bool MapView::upload_terrain() {
+    for (std::size_t i = 0; i < cell_.size(); ++i) {
+        std::uint8_t* out = terrain_px_.data() + i * 4u;
+        for (std::size_t ch = 0; ch < 3; ++ch) {
+            out[ch] = static_cast<std::uint8_t>(std::clamp(cell_[i][ch], 0.0f, 255.0f));
+        }
+        out[3] = 255;
+    }
+    if (!SDL_UpdateTexture(terrain_, nullptr, terrain_px_.data(), kMapW * 4)) {
+        SDL_Log("terrain upload failed: %s", SDL_GetError());
+        return false;
+    }
+    return true;
+}
+
 void MapView::fill_cells(const Map& map, const GenLayers& layers) {
     if (overlay_ == Overlay::Elevation) {
-        return; // drawn per pixel from the heights (see render)
+        // Colour bands by height; the GPU blends them between cell centres, and the contour lines
+        // are drawn over them (see draw).
+        for (int y = 0; y < kMapH; ++y) {
+            for (int x = 0; x < kMapW; ++x) {
+                const Rgb8 c = elevation_colour(map.height.at(x, y));
+                cell_[cell_index(x, y)] = {static_cast<float>(c.r), static_cast<float>(c.g),
+                                           static_cast<float>(c.b)};
+            }
+        }
+        return;
     }
     if (overlay_ != Overlay::Off) {
         // A noise layer: greyscale, stretched over the layer's own lowest to highest value.
@@ -304,112 +247,11 @@ bool MapView::update_fog(const Fog& fog, const Rect& cells) {
             t[3] = core_ && !fog.explored({x, y}) ? kHazeAlpha : 0;
         }
     }
-    // The whole layer is 320 x 180 texels (230 KB): uploading it all is cheaper than tracking
-    // regions.
+    // The whole layer is one texel per cell (about 2 MB): uploading it all is simpler than
+    // tracking regions, and it only happens when fog lifts.
     if (!SDL_UpdateTexture(fog_, nullptr, fog_px_.data(), kMapW * 4)) {
         SDL_Log("fog upload failed: %s", SDL_GetError());
         return false;
-    }
-    return true;
-}
-
-bool MapView::render(const Map& map) {
-    // Elevation: each pixel's height (in 1/16 units) blended between the four nearest cell
-    // centres, so the colour bands and contour lines are smooth curves rather than cell steps.
-    constexpr int kD = 2 * kCellPx; // a cell is kD sub-steps of half a pixel
-    const auto height16 = [&](int px, int py) {
-        const auto split = [](int p, int cells_n, int& c0, int& f) {
-            const int u = 2 * p + 1 - kCellPx;
-            c0 = u < 0 ? 0 : u / kD;
-            f = u < 0 ? 0 : u % kD;
-            if (c0 >= cells_n - 1) {
-                c0 = cells_n - 1;
-                f = 0;
-            }
-        };
-        int x0 = 0;
-        int fx = 0;
-        int y0 = 0;
-        int fy = 0;
-        split(std::clamp(px, 0, kMapPxW - 1), kMapW, x0, fx);
-        split(std::clamp(py, 0, kMapPxH - 1), kMapH, y0, fy);
-        const int x1 = std::min(x0 + 1, kMapW - 1);
-        const int y1 = std::min(y0 + 1, kMapH - 1);
-        const int top = map.height.at(x0, y0) * (kD - fx) + map.height.at(x1, y0) * fx;
-        const int bottom = map.height.at(x0, y1) * (kD - fx) + map.height.at(x1, y1) * fx;
-        return (top * (kD - fy) + bottom * fy) * 16 / (kD * kD);
-    };
-
-    const bool elevation = overlay_ == Overlay::Elevation;
-    std::vector<int> row;
-    std::vector<int> below;
-    if (elevation) {
-        row.resize(static_cast<std::size_t>(kMapPxW + 1));
-        below.resize(row.size());
-        for (int px = 0; px <= kMapPxW; ++px) {
-            row[static_cast<std::size_t>(px)] = height16(px, 0);
-        }
-    }
-    for (int py = 0; py < kMapPxH; ++py) {
-        const float v = (static_cast<float>(py) + 0.5f) / static_cast<float>(kCellPx) - 0.5f;
-        const int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, kMapH - 1);
-        const int y1 = std::min(y0 + 1, kMapH - 1);
-        const float fy = std::clamp(v - static_cast<float>(y0), 0.0f, 1.0f);
-        if (elevation) {
-            for (int px = 0; px <= kMapPxW; ++px) {
-                below[static_cast<std::size_t>(px)] = height16(px, py + 1);
-            }
-        }
-        std::uint8_t* out = pixels_.data() + static_cast<std::size_t>(py) * kMapPxW * 4u;
-        for (int px = 0; px < kMapPxW; ++px, out += 4) {
-            if (elevation) {
-                const auto i = static_cast<std::size_t>(px);
-                const int h = row[i];
-                const Rgb8 c = elevation_colour(h / 16);
-                const int level =
-                    std::max(contour_level(h, row[i + 1]), contour_level(h, below[i]));
-                const float k = level == 2 ? 0.40f : level == 1 ? 0.70f : 1.0f;
-                out[0] = static_cast<std::uint8_t>(static_cast<float>(c.r) * k);
-                out[1] = static_cast<std::uint8_t>(static_cast<float>(c.g) * k);
-                out[2] = static_cast<std::uint8_t>(static_cast<float>(c.b) * k);
-                out[3] = 255;
-                continue;
-            }
-            // Each pixel blends the four nearest cell centres, so there are no visible tiles.
-            const float u = (static_cast<float>(px) + 0.5f) / static_cast<float>(kCellPx) - 0.5f;
-            const int x0 = std::clamp(static_cast<int>(std::floor(u)), 0, kMapW - 1);
-            const int x1 = std::min(x0 + 1, kMapW - 1);
-            const float fx = std::clamp(u - static_cast<float>(x0), 0.0f, 1.0f);
-            const float wa = (1.0f - fx) * (1.0f - fy);
-            const float wb = fx * (1.0f - fy);
-            const float wc = (1.0f - fx) * fy;
-            const float wd = fx * fy;
-            const Rgbf& a = cell_[cell_index(x0, y0)];
-            const Rgbf& b = cell_[cell_index(x1, y0)];
-            const Rgbf& c = cell_[cell_index(x0, y1)];
-            const Rgbf& d = cell_[cell_index(x1, y1)];
-            for (std::size_t ch = 0; ch < 3; ++ch) {
-                const float val = a[ch] * wa + b[ch] * wb + c[ch] * wc + d[ch] * wd;
-                out[ch] = static_cast<std::uint8_t>(std::clamp(val, 0.0f, 255.0f));
-            }
-            out[3] = 255;
-        }
-        if (elevation) {
-            std::swap(row, below);
-        }
-    }
-
-    // The shrunk copies for zooming out: each one averages 2x2 pixel blocks of the one before.
-    halve(pixels_, kMapPxW, kMapPxH, half_);
-    halve(half_, kMapPxW / 2, kMapPxH / 2, quarter_);
-    const std::array<const std::vector<std::uint8_t>*, kTerrainLevels> levels = {&pixels_, &half_,
-                                                                                 &quarter_};
-    for (std::size_t i = 0; i < levels.size(); ++i) {
-        const int pitch = (kMapPxW >> i) * 4;
-        if (!SDL_UpdateTexture(terrain_[i], nullptr, levels[i]->data(), pitch)) {
-            SDL_Log("terrain upload %zu failed: %s", i, SDL_GetError());
-            return false;
-        }
     }
     return true;
 }
@@ -433,27 +275,44 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
     sh = std::min(sh, static_cast<float>(kMapPxH) - sy);
     const SDL_FRect dst{xf.x(sx), xf.y(sy), sw * xf.k, sh * xf.k};
 
-    // Terrain: the deepest copy whose scale is still at least the zoom, so the GPU never shrinks
-    // it by more than 2x (unless the window is tiny). Whole-number steps draw level 0 crisp.
-    // While the tuning panel previews a change, the 320 x 180 cell preview stands in for it.
-    if (previewing_ && preview_ != nullptr) {
-        const auto c = static_cast<float>(kCellPx);
-        const SDL_FRect psrc{sx / c, sy / c, sw / c, sh / c};
-        SDL_RenderTexture(renderer_, preview_, &psrc, &dst);
-    } else {
-        const std::size_t level = xf.k > 0.5f ? 0 : xf.k > 0.25f ? 1 : 2;
-        const float f = static_cast<float>(1 << level);
-        SDL_Texture* terrain = terrain_[level];
-        SDL_SetTextureScaleMode(terrain, xf.smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
-        const SDL_FRect src{sx / f, sy / f, sw / f, sh / f};
-        SDL_RenderTexture(renderer_, terrain, &src, &dst);
+    // Terrain: the cell texture, one texel per cell, so the source rectangle is in cells. At
+    // whole-number steps this lands 1:1 in world pixels in the view target, scaled up crisp later.
+    const auto c = static_cast<float>(kCellPx);
+    const SDL_FRect src{sx / c, sy / c, sw / c, sh / c};
+    SDL_RenderTexture(renderer_, terrain_, &src, &dst);
+
+    // Elevation overlay: contour lines over the colour bands, only the chunks in view; zoomed far
+    // out, only the major lines.
+    if (overlay_ == Overlay::Elevation && !contours_.chunks.empty()) {
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+        const int chunk_px = contours_.chunk_cells * kCellPx;
+        const int cx0 = std::max(0, static_cast<int>(sx) / chunk_px - 1);
+        const int cy0 = std::max(0, static_cast<int>(sy) / chunk_px - 1);
+        const int cx1 = std::min(contours_.chunks_w - 1, static_cast<int>(sx + sw) / chunk_px + 1);
+        const int cy1 = std::min(contours_.chunks_h - 1, static_cast<int>(sy + sh) / chunk_px + 1);
+        const bool minors = xf.k >= kMinorLinesFrom;
+        for (int pass = 0; pass < 2; ++pass) { // minor lines first, majors on top
+            const bool major_pass = pass == 1;
+            if (!major_pass && !minors) {
+                continue;
+            }
+            SDL_SetRenderDrawColor(renderer_, 20, 16, 12, major_pass ? kMajorAlpha : kMinorAlpha);
+            for (int cy = cy0; cy <= cy1; ++cy) {
+                for (int cx = cx0; cx <= cx1; ++cx) {
+                    for (const ContourSegment& s : contours_.chunk(cx, cy)) {
+                        if (s.major == major_pass) {
+                            SDL_RenderLine(renderer_, xf.x(s.x0), xf.y(s.y0), xf.x(s.x1),
+                                           xf.y(s.y1));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Fog: one texel per cell, stretched with linear filtering.
     if (fog_shown_ && core_) {
-        const auto c = static_cast<float>(kCellPx);
-        const SDL_FRect fsrc{sx / c, sy / c, sw / c, sh / c};
-        SDL_RenderTexture(renderer_, fog_, &fsrc, &dst);
+        SDL_RenderTexture(renderer_, fog_, &src, &dst);
     }
 
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);

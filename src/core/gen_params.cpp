@@ -23,14 +23,15 @@ template <class E> void fit_enum(E& e, int count, E fallback, int& changed) {
 }
 
 void fit_noise(NoiseSpec& n, int& changed) {
-    fit(n.step, 2, 160, changed); // a lattice point at least every 2 cells, at most half the map
+    fit(n.step, 2, kMapW / 2,
+        changed); // a lattice point at least every 2 cells, at most half the map
     fit(n.octaves, 1, kMaxOctaves, changed);
     fit(n.lacunarity_pct, 10, 100, changed);
     fit(n.persistence_pct, 0, 100, changed);
     fit_enum(n.curve, kCurves, NoiseSpec{}.curve, changed);
     fit_enum(n.shape, kShapes, NoiseSpec{}.shape, changed);
     fit(n.warp_cells, 0, 64, changed);
-    fit(n.warp_step, 2, 160, changed);
+    fit(n.warp_step, 2, kMapW / 2, changed);
 }
 
 } // namespace
@@ -49,8 +50,8 @@ int validate(GenParams& p) noexcept {
     fit(p.cliff_share_max_pct, p.cliff_share_min_pct, 100, changed);
     fit(p.flat_limit, 0, 255, changed);
     fit_noise(p.formation_rough, changed);
-    fit(p.formations_min, 0, 64, changed);
-    fit(p.formations_max, p.formations_min, 64, changed);
+    fit(p.formations_min, 0, 512, changed);
+    fit(p.formations_max, p.formations_min, 512, changed);
     fit(p.formation_radius_min, 1, 64, changed);
     fit(p.formation_radius_max, p.formation_radius_min, 64, changed);
     fit(p.formation_scale_min_pct, 0, 400, changed);

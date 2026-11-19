@@ -94,7 +94,7 @@ bool TuningPanel::slider(const char* label, int* v, int lo, int hi) {
 void TuningPanel::noise_controls(const char* id, NoiseSpec& n) {
     ImGui::PushID(id);
     slider("octaves", &n.octaves, 1, kMaxOctaves);
-    slider("step (cells)", &n.step, 2, 160);
+    slider("step (cells)", &n.step, 2, kMapW / 2);
     if (n.octaves > 1) {
         slider("lacunarity %", &n.lacunarity_pct, 10, 100);
         slider("persistence %", &n.persistence_pct, 0, 100);
@@ -111,7 +111,7 @@ void TuningPanel::noise_controls(const char* id, NoiseSpec& n) {
     }
     slider("warp (cells)", &n.warp_cells, 0, 64);
     if (n.warp_cells > 0) {
-        slider("warp step", &n.warp_step, 2, 160);
+        slider("warp step", &n.warp_step, 2, kMapW / 2);
     }
     ImGui::PopID();
 }
@@ -210,8 +210,8 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
         slider("flat limit", &params.flat_limit, 0, 255);
     }
     if (ImGui::CollapsingHeader("Rock formations")) {
-        slider("count min", &params.formations_min, 0, 64);
-        slider("count max", &params.formations_max, 0, 64);
+        slider("count min", &params.formations_min, 0, 512);
+        slider("count max", &params.formations_max, 0, 512);
         slider("radius min", &params.formation_radius_min, 1, 64);
         slider("radius max", &params.formation_radius_max, 1, 64);
         slider("scale min %", &params.formation_scale_min_pct, 0, 400);
@@ -233,7 +233,7 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
         slider("core area h", &params.core_area.h, 5, kMapH);
         slider("core tries", &params.core_tries, 1, 64);
         slider("spawn on edge %", &params.spawn_edge_pct, 0, 100);
-        slider("spawn min walk", &params.min_spawn_dist, 0, 600);
+        slider("spawn min walk", &params.min_spawn_dist, 0, 2000);
         slider("spawn spacing", &params.spawn_spacing, 0, kMapW);
     }
     if (ImGui::CollapsingHeader("Retries")) {

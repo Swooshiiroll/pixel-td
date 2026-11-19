@@ -34,7 +34,7 @@ class TuningPanel {
     // How the map should be updated after a frame of the panel.
     enum class Change : std::uint8_t {
         None,
-        Preview, // a slider is being dragged: regenerate and show the fast preview
+        Preview, // a slider is being dragged: regenerate (the caller throttles it)
         Commit,  // a value was set (slider released, combo, button, seed): regenerate fully
     };
 

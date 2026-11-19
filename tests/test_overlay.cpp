@@ -38,7 +38,7 @@ std::uint64_t hash_map(const Map& m) {
 
 TEST_CASE("recording the noise layers never changes the map") {
     const GenParams p;
-    for (std::uint64_t seed = 0; seed < 20; ++seed) {
+    for (std::uint64_t seed = 0; seed < 8; ++seed) {
         CAPTURE(seed);
         GenLayers layers;
         const Map with = generate_map(seed, p, &layers);

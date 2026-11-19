@@ -5,7 +5,8 @@
 // Camera).
 //
 //   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--zoom STEP] [--no-fog] [--window WxH]
-//           [--preset FILE] [--panel] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
+//           [--preset FILE] [--panel] [--map-shot file.bmp] [--map-scale N] [--frames N]
+//           [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
 //                       subgrid; repeatable)
@@ -17,8 +18,9 @@
 //     --window WxH      developer tool: open the window at W x H (screenshots)
 //     --preset FILE     developer tool: generate with the settings in a preset file (#21)
 //     --panel           developer tool: open the map-tuning panel at start (Tab toggles it)
-//     --map-shot F      developer tool: save the whole 5120x2880 map to F (BMP), then exit. With
-//                       no probes everything is shown explored; with probes, the fog is shown.
+//     --map-shot F      developer tool: save the whole 15360x8640 map to F (BMP), shrunk by
+//                       --map-scale (2, 4 or 8; default 4: 3840x2160), then exit. With no probes
+//                       everything is shown explored; with probes, the fog is shown.
 //     --frames N        quit after N frames (smoke tests)
 //     --screenshot F    with --frames: save the last frame to F (BMP)
 //
@@ -69,6 +71,7 @@ constexpr int kMaxTicksPerFrame = 8;
 constexpr int kPanPerTick = 18;  // window pixels per tick, the same speed at every zoom
 constexpr float kEdgePan = 8.0f; // window points from the edge that start edge panning
 constexpr SDL_Color kProbeColour{250, 220, 120, 200};
+constexpr Uint64 kRegenThrottleNs = 120'000'000; // tuning panel: regenerate at most this often
 
 // The --zoom option.
 enum class StartZoom : std::uint8_t { Standard, Whole, Half, Scale };
@@ -86,6 +89,7 @@ struct Options {
     bool no_fog = false;
     const char* preset = nullptr;
     bool panel = false;
+    int map_scale = 4; // --map-shot shrinks the map by this (2, 4 or 8)
     int window_w = kStandardViewW * 2;
     int window_h = kStandardViewH * 2;
 };
@@ -157,6 +161,12 @@ bool parse_options(int argc, char** argv, Options& out) {
             out.preset = argv[++i];
         } else if (std::strcmp(argv[i], "--panel") == 0) {
             out.panel = true;
+        } else if (std::strcmp(argv[i], "--map-scale") == 0 && has_value) {
+            out.map_scale = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+            if (out.map_scale != 2 && out.map_scale != 4 && out.map_scale != 8) {
+                std::fprintf(stderr, "--map-scale takes 2, 4 or 8\n");
+                return false;
+            }
         } else if (std::strcmp(argv[i], "--window") == 0 && has_value) {
             if (!parse_pair(argv[++i], 'x', out.window_w, out.window_h) || out.window_w < 1 ||
                 out.window_h < 1) {
@@ -164,10 +174,10 @@ bool parse_options(int argc, char** argv, Options& out) {
                 return false;
             }
         } else {
-            std::fprintf(stderr,
-                         "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
-                         "[--zoom whole|half|N] [--no-fog] [--window WxH] [--preset FILE] "
-                         "[--panel] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]\n");
+            std::fprintf(stderr, "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
+                                 "[--zoom whole|half|N] [--no-fog] [--window WxH] [--preset FILE] "
+                                 "[--panel] [--map-shot file.bmp] [--map-scale 2|4|8] [--frames N] "
+                                 "[--screenshot file.bmp]\n");
             return false;
         }
     }
@@ -220,9 +230,8 @@ bool place_probe(World& world, MapView& view, SubCell top_left) {
     return true;
 }
 
-// Generates the map for `seed` with the world's settings and bakes it. With `preview` (the tuning
-// panel while a slider is dragged) it shows the fast cell preview instead of the full bake.
-bool new_map(World& world, MapView& view, std::uint64_t seed, bool preview = false) {
+// Generates the map for `seed` with the world's settings and colours it.
+bool new_map(World& world, MapView& view, std::uint64_t seed) {
     const Uint64 start = SDL_GetTicksNS();
     world.map = generate_map(seed, world.params, &world.layers);
     world.gen_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
@@ -230,11 +239,6 @@ bool new_map(World& world, MapView& view, std::uint64_t seed, bool preview = fal
     world.fog.reset();
     world.fog.explore_core(world.map, world.params.light_range_px);
     const Map& m = world.map;
-    if (preview) {
-        const bool ok = view.set_preview(m, world.layers, world.fog);
-        world.stats = game::measure(m, world.params, world.gen_ms, view.bake_ms());
-        return ok;
-    }
     const bool ok = view.set_map(m, world.layers, world.fog);
     world.stats = game::measure(m, world.params, world.gen_ms, view.bake_ms());
     SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
@@ -424,12 +428,12 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
     // The relative resolution: the world pixels on screen, and their share of the map.
     char area[48];
     const ViewSize shown = visible_area(s.view);
-    const int share = map_share_permille(s.view);
-    if (share >= 1000) {
+    const int share = map_share_bp(s.view); // hundredths of a percent
+    if (share >= 10000) {
         std::snprintf(area, sizeof area, "%dx%d (100%%)", shown.w, shown.h);
     } else {
-        std::snprintf(area, sizeof area, "%dx%d (%d.%d%%)", shown.w, shown.h, share / 10,
-                      share % 10);
+        std::snprintf(area, sizeof area, "%dx%d (%d.%02d%%)", shown.w, shown.h, share / 100,
+                      share % 100);
     }
     std::snprintf(line, sizeof line, "seed %llx  zoom %s %s  gen %.1fms  cell %d,%d %s%s%s",
                   static_cast<unsigned long long>(m.seed), zoom, area, world.gen_ms, hover.x,
@@ -450,9 +454,10 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
     }
 }
 
-// Developer tool: renders the whole map once into a 5120x2880 target and saves it.
+// Developer tool: renders the whole map once, shrunk by `scale` (2, 4 or 8), and saves it.
 int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const std::vector<SubCell>& probes,
-                 Overlay overlay, bool no_fog, const GenParams& params, const char* path) {
+                 Overlay overlay, bool no_fog, const GenParams& params, int scale,
+                 const char* path) {
     World world;
     world.params = params;
     MapView view(r);
@@ -472,14 +477,14 @@ int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const std::vector<SubCell>
                     c.x, c.y);
         }
     }
-    SDL_Texture* full =
-        SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, kMapPxW, kMapPxH);
+    SDL_Texture* full = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
+                                          kMapPxW / scale, kMapPxH / scale);
     if (full == nullptr) {
         SDL_Log("map target failed: %s", SDL_GetError());
         return 1;
     }
     SDL_SetRenderTarget(r, full);
-    const DrawXf xf{};
+    const DrawXf xf{CameraPos{0, 0}, 1.0f / static_cast<float>(scale), true};
     view.draw(xf, {kMapPxW, kMapPxH}, world.fog);
     for (const SubCell c : world.probes) {
         view.draw_probe(xf, c, kProbeColour);
@@ -532,7 +537,7 @@ int main(int argc, char** argv) {
     }
     if (opts.map_shot != nullptr) {
         const int code = run_map_shot(renderer, first_seed, opts.probes, opts.overlay, opts.no_fog,
-                                      start_params, opts.map_shot);
+                                      start_params, opts.map_scale, opts.map_shot);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -581,6 +586,8 @@ int main(int argc, char** argv) {
         }
         CameraPos cam = centred_on(core_rect(world.map), screen.view);
         bool probe_mode = false;
+        bool regen_pending = false; // the tuning panel changed something while dragging
+        Uint64 last_regen = 0;
         Cell hover{};
         SubCell probe_at{};
 
@@ -755,9 +762,15 @@ int main(int argc, char** argv) {
                                                    ? screen.zoom.num
                                                    : std::max(1, screen.out_h / kStandardViewH));
                 const auto change = panel.draw(world.params, seed, world.stats, top * 2.0f);
-                if (change != game::TuningPanel::Change::None) {
-                    const bool preview = change == game::TuningPanel::Change::Preview;
-                    if (!new_map(world, view, seed, preview)) {
+                // A set value regenerates now; a slider being dragged at most every 120 ms (a
+                // map takes about 150 ms to generate).
+                regen_pending = regen_pending || change == game::TuningPanel::Change::Preview;
+                const Uint64 since = SDL_GetTicksNS() - last_regen;
+                if (change == game::TuningPanel::Change::Commit ||
+                    (regen_pending && since >= kRegenThrottleNs)) {
+                    regen_pending = false;
+                    last_regen = SDL_GetTicksNS();
+                    if (!new_map(world, view, seed)) {
                         exit_code = 1;
                         running = false;
                     }

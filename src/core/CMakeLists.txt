@@ -1,6 +1,7 @@
 # Pure C++20 simulation core: no SDL, no I/O, deterministic. Unit tests link only this.
 add_library(pixeltd_core STATIC
   camera.cpp
+  contours.cpp
   fog.cpp
   fixed_step.cpp
   los.cpp
