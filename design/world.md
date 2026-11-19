@@ -1,9 +1,10 @@
 # World layout and map generator
 
 Status: **confirmed by the owner** (PR #4, 2026-11-18), then **reworked by the owner the same day**
-(issue #5). The world became a seamless heightmap at 3840 x 2160 px. The seed now places the core
-and the spawns, and enemies find their own way instead of following a generated path (see
-[pathfinding](#enemies-and-routes)).
+(issue #5). The world became a seamless heightmap. The seed now places the core and the spawns,
+and enemies find their own way instead of following a generated path (see
+[pathfinding](#enemies-and-routes)). The owner then resized the map to 5120 x 2880 px on 16 px
+cells, with an 8 px placement subgrid and a zoom-out to the whole map (issue #15).
 
 Numbers marked **(start)** are starting values. They live in the live-tuning data file and get
 adjusted by feel in the test arena; the owner chose this over settling them on paper.
@@ -21,18 +22,22 @@ towers shape the rest of their route.
 
 | What | Size |
 |---|---|
-| Map | **3840 x 2160 px**: four 1920x1080 screens in a 2 x 2 layout |
-| Hidden grid | 12 x 12 px cells: **320 x 180 cells** |
-| Screen at default zoom | about 640 x 360 px (about 53 x 30 cells), a 36th of the map; see Camera |
-| Light tower | 2 x 2 cells (24 px) |
-| Heavy tower | 4 x 4 cells (48 px) |
-| Core | 6 x 6 cells (72 px) |
-| Spawn | 2 x 2 cells (24 px) **(start)** |
+| Map | **5120 x 2880 px**: four 2560x1440 screens in a 2 x 2 layout |
+| Hidden grid | 16 x 16 px cells: **320 x 180 cells** |
+| Placement subgrid | 8 x 8 px subcells: 640 x 360 (two per cell each way) |
+| Screen at default zoom | about 640 x 360 px (40 x 22.5 cells), a 64th of the map; see Camera |
+| Light tower | 3 x 3 subcells (24 px) |
+| Heavy tower | 6 x 6 subcells (48 px) |
+| Core | 9 x 9 subcells (72 px) |
+| Spawn | 2 x 2 cells (32 px) **(start)** |
 
 - **The look is seamless.** There are no tiles or grid lines; height is shaded smoothly across
   cells.
-- **The grid is hidden** but real: towers, the core, spawns and pathfinding all snap to its 12 px
+- **The grid is hidden** but real. Terrain, spawns, line of sight and pathfinding use its 16 px
   cells.
+- **Towers and the core snap to the 8 px subgrid** and keep their sizes (24, 48 and 72 px). A
+  footprint covers parts of several cells: a light tower always 2 x 2 cells, a heavy one 3 x 3 or
+  4 x 4 depending on where it sits, and the core 5 x 5.
 - There's one map per run, and it's fixed for the whole run.
 - The view is flat top-down, and the setting is a planet-surface outpost.
 
@@ -53,7 +58,7 @@ Every cell has:
   cliff.
   - Enemies can't cross a cliff, in either direction.
   - A cell beside a cliff can't be built on.
-- **Rock formations.** Large outcrops, **8–16 per map**, each **4–20 cells across (start)**. They
+- **Rock formations.** Large outcrops, **6–12 per map**, each about **10–32 cells across (start)**. They
   stand far above the surrounding terrain, at height 210–255.
   - Nothing can be built on them.
   - Nothing can walk through them.
@@ -84,8 +89,8 @@ first build phase.
 
 1. **Terrain:** height, mesas, cliffs, rock formations and materials.
 2. **The core:**
-   - The seed picks a 6 x 6 spot in the **central third** of the map (cells x 107–212,
-     y 60–119).
+   - The seed picks a spot on the 8 px subgrid whose cells all lie in the **central third** of the
+     map (cells x 106–213, y 60–119).
    - The spot must be buildable (see Building).
 3. **Spawns:** the seed places **3**, each on a map edge or inside the map (chosen 50/50
    **(start)**).
@@ -113,14 +118,17 @@ arena (issue #11). Decided so far:
   through. Placements are never refused for blocking.
 - **The routing rule is set per enemy type** (for example, runners take the shortest path), as
   part of the enemy design.
-- **Gaps:** enemies fit through any 1-cell (12 px) gap.
+- **Gaps:** enemies fit through any 1-cell (16 px) gap. Pathfinding runs on the 16 px cells, and a
+  tower blocks every cell its footprint touches, so the 8 px gaps the subgrid allows aren't
+  walkable (open question 4).
 - **Movement:** cliffs and rock formations block it.
 - **Pinned:** whether slopes slow enemies.
 
 ### Building
 
-- Towers (and the core) go on **fairly flat ground**: across the footprint, the height range must
-  be at most **6 units (start)**, with no cliff cell and no rock formation.
+- Towers (and the core) go on **fairly flat ground**: across every cell the footprint covers, the
+  height range must be at most **6 units (start)**, with no cliff cell and no rock formation.
+- Footprints snap to the 8 px subgrid.
 - A tower stands at its ground's height, which sets its range and sight.
 
 ### Visibility (fog)
@@ -131,7 +139,8 @@ Fog works as **explored ground**:
 - **Unexplored ground has a light haze.** Spawns and enemies under it are hidden.
 - **Exploring:**
   - **At run start,** every cell within one light tower's range of the core is explored. Until
-    towers define their range, that's 6 cells from the nearest core cell **(start)**.
+    towers define their range, that's every cell whose centre is within 72 px of the core's edge
+    **(start)**.
   - **After that,** a tower explores every cell it can see within its reach (range adjusted for
     that cell's height).
   - **Sight is always direct line of sight**, even for lobbed weapons.
@@ -144,15 +153,29 @@ Fog works as **explored ground**:
 ### Camera
 
 - **Pan:** WASD, the arrow keys, the screen edges, or a right-drag.
-- **Zoom:** in whole-number scale steps, so pixels stay crisp.
-  - At every step the view **fills the window**, with no black bars.
+- **Zoom:** whole-number scale steps keep pixels crisp, then zooming out continues to the whole map.
   - **The default zoom** is the largest whole-number scale whose view is at least 640 x 360. For
     example, 3x on 1920x1080 gives exactly 640x360, and 2x on 1366x768 gives 683x384.
-  - **Zooming out** stops at the last step whose view still fits inside the map. On 1080p that's
-    1x, which shows 1920x1080: a quarter of the map.
   - **Zooming in** goes one step closer than the default: 4x on 1080p, which shows 480x270.
+  - **Zooming out**, the whole-number steps go down to 1x (or the last whole step whose view still
+    fits inside the map, on windows bigger than it). Then:
+    - **1/2**, if 1x doesn't already show more than half the map's width: on 1080p it shows
+      3840 x 2160;
+    - **the whole map**, fitted to the window. If the window's shape differs from the map's, the
+      rest is dark bars.
+  - **Pixel-perfect exception:** the steps below 1x (and any other fractional step) are drawn
+    shrunk and **smooth**: from copies of the terrain averaged down 2x and 4x, then filtered. These
+    are the only views that aren't pixel-perfect. Play continues at every step.
+  - At the whole-number steps the view **fills the window**, with no bars.
   - **Controls:** the mouse wheel zooms about the cursor, and + and - zoom about the centre of the
     screen.
+
+| Window | Zoom steps (closest → farthest) |
+|---|---|
+| 1920x1080 | 4x, **3x (default)**, 2x, 1x, 1/2, whole map (0.375) |
+| 2560x1440 | 5x, **4x**, 3x, 2x, 1x, whole map (0.5) |
+| 3840x2160 | 7x, **6x**, …, 1x, whole map (0.75) |
+| 1280x720 | 3x, **2x**, 1x, 1/2, whole map (0.25) |
 - The camera starts centred on the core.
 
 ### Developer tools
@@ -164,7 +187,12 @@ are launch flags and keys for development, not settings in the game.
 - **F5** makes a new map from a new random seed.
 - The **HUD** shows the seed, the zoom, the generation time, and the cell under the cursor with its
   height.
-- `--map-shot file.bmp` saves the whole 3840x2160 map as an image (fully explored), then exits.
+- `--map-shot file.bmp` saves the whole 5120x2880 map as an image (fully explored), then exits.
+- **F** hides and shows the fog. While it's off, the haze is gone and hidden spawns show; exploring
+  carries on underneath, and the HUD says "fog off". `--no-fog` starts with it off.
+- `--zoom whole|half|N` starts at the whole-map step, the 1/2 step, or the whole-number scale N.
+- **Probes** (P, or `--probe X,Y` in subcells) and **overlays** (O, `--overlay NAME`): see #12 and
+  #13.
 
 The test arena will get proper seed entry later.
 
@@ -238,8 +266,11 @@ All in `src/core`, headless, in doctest:
   - no exploring by enemies;
   - explored cells stay explored;
   - spawns and enemies on unexplored cells are hidden.
-- **Camera:** the default, zoom-out and zoom-in steps for 1920x1080, 1366x768 and 2560x1440, plus
-  small and very wide windows.
+- **Placement subgrid:** the cells a footprint covers at even and odd positions, and a footprint
+  refused if any covered cell is bad.
+- **Camera:** the zoom steps for 1920x1080, 2560x1440, 3840x2160, 1280x720 and a window bigger than
+  the map, plus small and very wide windows. Fractional zoom keeps the world pixel under the cursor
+  in place, and the whole-map step centres the map.
 - **Performance:** measure generation and the terrain bake.
   - **Proposed** target: under 50 ms per stage in a Release build on ANODE-MGMT.
 
@@ -250,5 +281,8 @@ All in `src/core`, headless, in doctest:
 3. For the arena or tower round: refusing a tower on unexplored ground (because a spawn or an
    enemy is there) would give its position away. Should building on unexplored ground be allowed,
    refused, or allowed with that leak accepted?
+4. For the pathfinding round (#11): towers sit on the 8 px subgrid but enemies path on 16 px
+   cells, so a tower blocks every cell it touches and 8 px gaps between towers aren't walkable.
+   Keep that, or path on the subgrid?
 
 The remaining numbers are **(start)** values to tune in the arena.

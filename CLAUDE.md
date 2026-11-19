@@ -12,6 +12,8 @@ implements.
 
 - **Planning** (plan mode: design rounds, bug triage, the plan itself): Opus 5.5, high effort.
 - **Carrying out an approved plan:** Sonnet 5.5, medium effort.
+- **Tweaks after a review** (fixes and adjustments the owner asks for once they've seen a result):
+  Opus 5.5 again, through plan mode, not straight into code on Sonnet.
 
 This is automatic: the owner's Claude Code user settings use `opusplan`, which switches from Opus to
 Sonnet when a plan is approved, with the effort set per model. So plan in plan mode. If a session
@@ -103,12 +105,15 @@ Logs go to `out/`.
 - **Determinism:** gameplay randomness comes only from `pixeltd::Rng` seeded per run; the sim
   advances in fixed 60 Hz ticks (`FixedStep`). Never use wall-clock time or `rand()` in the sim.
 - **Pixel-perfect view:** the world is drawn 1:1 in world pixels into a render target. The window
-  shows it at a whole-number scale, and you never draw at a fractional scale.
-  - **Grid:** a hidden grid of 12 px cells; the terrain itself is drawn seamless (no tiles or grid
-    lines). A light tower is 2x2 cells (24 px), a heavy tower 4x4 (48 px), and the core 6x6 (72 px).
-  - **Map:** 320x180 cells (3840x2160 px), a heightmap.
-  - **Zoom:** whole-number steps. The view fills the window, and the default zoom shows about
-    640x360. See `design/world.md`.
+  shows it at a whole-number scale, and you never draw at a fractional scale. The one exception is
+  zooming out past 1x (to 1/2 and the whole map): those steps draw shrunk, smooth copies.
+  - **Grid:** a hidden grid of 16 px cells for terrain, line of sight and pathfinding; the terrain
+    itself is drawn seamless (no tiles or grid lines). Towers and the core snap to an 8 px
+    placement subgrid: a light tower is 3x3 subcells (24 px), a heavy tower 6x6 (48 px), and the
+    core 9x9 (72 px).
+  - **Map:** 320x180 cells (5120x2880 px), a heightmap.
+  - **Zoom:** whole-number steps, then 1/2 and the whole map. The view fills the window at
+    whole-number steps, and the default zoom shows about 640x360. See `design/world.md`.
   - **Pure maths stays in `src/core`.** That covers `core/camera.hpp`, and the front end only
     feeds it window sizes.
 - **Map generation is deterministic across compilers.**

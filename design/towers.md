@@ -35,8 +35,8 @@ Every tower is exactly **one chassis + one weapon + one module**, in three fixed
 
 | Chassis | Footprint | Takes |
 |---|---|---|
-| Light | 2 x 2 cells (24 px) | Light weapons |
-| Heavy | 4 x 4 cells (48 px) | Light **or** heavy weapons |
+| Light | 3 x 3 subcells (24 px) | Light weapons |
+| Heavy | 6 x 6 subcells (48 px) | Light **or** heavy weapons |
 
 The examples are placeholders. The real parts come from pitch and pick (see Designing parts).
 
@@ -125,7 +125,7 @@ the part it upgrades.
 ## Interactions
 
 - **World ([world.md](world.md)):**
-  - footprints on the hidden 12 px grid, on fairly flat ground (no cliffs or rock formations);
+  - footprints on the 8 px placement subgrid, on fairly flat ground across every 16 px cell they cover (no cliffs or rock formations);
   - range grows with height above the target, and shrinks when shooting uphill;
   - direct fire needs a clear line over the terrain, while lobbed weapons arc over terrain;
   - rock formations block every shot;
