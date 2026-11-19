@@ -22,3 +22,4 @@ them under its version (see CLAUDE.md, "Releasing").
 
 ### Changed
 - Faster CI: the check and unit-test jobs are merged into one core-only job (no SDL), and tools, apt packages and compiled objects are cached between runs; the unit tests only run when a push changes a system or object (#17).
+- The map is flat (owner's decision): rock formations, now twice as many (108-216, cap 15%, tunable in the panel), are the only terrain obstacle. They block walking, building, sight and direct fire; lobbed shots arc over them; range is a plain circle. Heights, mesas, cliffs, range by grade, contours and the height overlays are removed, kept in `archive/heightmap/` with #29's simplex and erosion experiments. Generation takes about 55 ms (was about 140) (#30).

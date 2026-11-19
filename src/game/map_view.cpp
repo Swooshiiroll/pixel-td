@@ -15,7 +15,8 @@ namespace {
 using Rgbf = std::array<float, 3>;
 
 // Placeholder palette (a dusty planet surface) until the style board picks the art direction.
-// Hue comes from the material; brightness comes from height and slope.
+// The flat ground (#30) is coloured by its material; rock formations are shaded by how tall they
+// stand and cast a shadow to the south-east.
 constexpr std::array<Rgbf, kMaterials> kMaterialColour = {{
     {196.0f, 152.0f, 108.0f}, // dust
     {160.0f, 150.0f, 138.0f}, // gravel
@@ -23,19 +24,13 @@ constexpr std::array<Rgbf, kMaterials> kMaterialColour = {{
     {190.0f, 116.0f, 82.0f},  // rust
 }};
 constexpr Rgbf kFormationColour{132.0f, 124.0f, 142.0f};
-constexpr Rgbf kNeutral{176.0f, 158.0f, 140.0f}; // materials are muted towards this
-constexpr Rgbf kMesaTint{230.0f, 140.0f, 60.0f}; // the mesa overlay tints terraced regions
+constexpr Rgbf kNeutral{176.0f, 158.0f, 140.0f}; // materials are muted a little towards this
 
 // The fog layer: unexplored cells are pulled this far towards this colour.
 constexpr std::uint8_t kHazeR = 58;
 constexpr std::uint8_t kHazeG = 62;
 constexpr std::uint8_t kHazeB = 80;
 constexpr std::uint8_t kHazeAlpha = 115; // 0.45 * 255
-
-// Contour lines: minor and major (every 50 units) alpha, and the zoom below which only majors show.
-constexpr std::uint8_t kMinorAlpha = 70;
-constexpr std::uint8_t kMajorAlpha = 150;
-constexpr float kMinorLinesFrom = 0.25f;
 
 constexpr std::size_t cell_index(int x, int y) noexcept {
     return static_cast<std::size_t>(y) * static_cast<std::size_t>(kMapW) +
@@ -86,7 +81,6 @@ bool MapView::set_map(const Map& map, const GenLayers& layers, const Fog& fog) {
     core_ = map.core;
     spawns_ = map.spawns;
     fill_cells(map, layers);
-    contours_ = overlay_ == Overlay::Elevation ? build_contours(map.height) : Contours{};
     const bool ok = upload_terrain() && update_fog(fog, Rect{0, 0, kMapW, kMapH});
     bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
     return ok;
@@ -101,7 +95,6 @@ bool MapView::set_overlay(Overlay overlay, const Map& map, const GenLayers& laye
     }
     const Uint64 start = SDL_GetTicksNS();
     fill_cells(map, layers);
-    contours_ = overlay_ == Overlay::Elevation ? build_contours(map.height) : Contours{};
     const bool ok = upload_terrain();
     bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
     return ok;
@@ -123,44 +116,9 @@ bool MapView::upload_terrain() {
 }
 
 void MapView::fill_cells(const Map& map, const GenLayers& layers) {
-    if (overlay_ == Overlay::Elevation) {
-        // Colour bands by height; the GPU blends them between cell centres, and the contour lines
-        // are drawn over them (see draw).
-        for (int y = 0; y < kMapH; ++y) {
-            for (int x = 0; x < kMapW; ++x) {
-                const Rgb8 c = elevation_colour(map.height.at(x, y));
-                cell_[cell_index(x, y)] = {static_cast<float>(c.r), static_cast<float>(c.g),
-                                           static_cast<float>(c.b)};
-            }
-        }
-        return;
-    }
     if (overlay_ != Overlay::Off) {
         // A noise layer: greyscale, stretched over the layer's own lowest to highest value.
-        const Grid<int>* field = nullptr;
-        switch (overlay_) {
-        case Overlay::Octave1:
-            field = &layers.octave[0];
-            break;
-        case Overlay::Octave2:
-            field = &layers.octave[1];
-            break;
-        case Overlay::Octave3:
-            field = &layers.octave[2];
-            break;
-        case Overlay::Height:
-            field = &layers.height_sum;
-            break;
-        case Overlay::Mesa:
-            field = &layers.mesa_noise;
-            break;
-        case Overlay::Rough:
-            field = &layers.rough;
-            break;
-        default:
-            field = &layers.material;
-            break;
-        }
+        const Grid<int>* field = overlay_ == Overlay::Rough ? &layers.rough : &layers.material;
         const auto [lo_it, hi_it] =
             std::minmax_element(field->cells().begin(), field->cells().end());
         const int lo = *lo_it;
@@ -170,33 +128,29 @@ void MapView::fill_cells(const Map& map, const GenLayers& layers) {
                 const float g = layers.valid ? 30.0f + static_cast<float>(field->at(x, y) - lo) *
                                                            205.0f / static_cast<float>(span)
                                              : 128.0f; // the fallback map has no noise
-                Rgbf c{g, g, g};
-                if (overlay_ == Overlay::Mesa && layers.valid && layers.mesa.at(x, y) != 0) {
-                    for (std::size_t ch = 0; ch < 3; ++ch) {
-                        c[ch] = c[ch] * 0.55f + kMesaTint[ch] * 0.45f; // a terraced region
-                    }
-                }
-                cell_[cell_index(x, y)] = c;
+                cell_[cell_index(x, y)] = {g, g, g};
             }
         }
         return;
     }
 
-    // The terrain. Each cell's colour: its material hue (softened over its neighbours and muted,
-    // so height reads first), times brightness from height, hill shading from the slope (lit from
-    // the north-west), and the shadow rock formations cast to the south-east.
-    const auto h_at = [&](int x, int y) {
-        return static_cast<float>(
-            map.height.at(std::clamp(x, 0, kMapW - 1), std::clamp(y, 0, kMapH - 1)));
+    // The terrain. The flat ground's colour is its material hue, softened over its neighbours and
+    // muted a little. Rock formations are shaded by how tall they stand (their 1..255 value) and
+    // lit from the north-west, and cast a shadow to the south-east.
+    const auto rock = [&](int x, int y) {
+        return map.formation.in_bounds(x, y) ? static_cast<float>(map.formation.at(x, y)) : 0.0f;
     };
-    const auto rock_at = [&](int x, int y) {
-        return map.formation.in_bounds(x, y) && map.formation.at(x, y) != 0;
-    };
+    const auto rock_at = [&](int x, int y) { return rock(x, y) > 0.0f; };
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
             Rgbf base{0.0f, 0.0f, 0.0f};
+            float k = 0.86f;
             if (rock_at(x, y)) {
                 base = kFormationColour;
+                const float gx = rock(x + 1, y) - rock(x - 1, y);
+                const float gy = rock(x, y + 1) - rock(x, y - 1);
+                k = (1.0f + 0.4f * rock(x, y) / 255.0f) *
+                    std::clamp(1.0f - (gx + gy) * 0.004f, 0.55f, 1.4f);
             } else {
                 for (int dy = -2; dy <= 2; ++dy) {
                     for (int dx = -2; dx <= 2; ++dx) {
@@ -208,14 +162,9 @@ void MapView::fill_cells(const Map& map, const GenLayers& layers) {
                     }
                 }
                 for (std::size_t ch = 0; ch < 3; ++ch) {
-                    base[ch] = base[ch] * 0.5f + kNeutral[ch] * 0.5f;
+                    base[ch] = base[ch] * 0.8f + kNeutral[ch] * 0.2f;
                 }
             }
-            const float h = h_at(x, y);
-            const float gx = h_at(x + 1, y) - h_at(x - 1, y);
-            const float gy = h_at(x, y + 1) - h_at(x, y - 1);
-            float k =
-                (0.28f + 0.87f * h / 255.0f) * std::clamp(1.0f - (gx + gy) * 0.012f, 0.4f, 1.5f);
             if (!rock_at(x, y)) {
                 for (int d = 1; d <= 4; ++d) {
                     if (rock_at(x - d, y - d)) {
@@ -281,35 +230,6 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
     const SDL_FRect src{sx / c, sy / c, sw / c, sh / c};
     SDL_RenderTexture(renderer_, terrain_, &src, &dst);
 
-    // Elevation overlay: contour lines over the colour bands, only the chunks in view; zoomed far
-    // out, only the major lines.
-    if (overlay_ == Overlay::Elevation && !contours_.chunks.empty()) {
-        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-        const int chunk_px = contours_.chunk_cells * kCellPx;
-        const int cx0 = std::max(0, static_cast<int>(sx) / chunk_px - 1);
-        const int cy0 = std::max(0, static_cast<int>(sy) / chunk_px - 1);
-        const int cx1 = std::min(contours_.chunks_w - 1, static_cast<int>(sx + sw) / chunk_px + 1);
-        const int cy1 = std::min(contours_.chunks_h - 1, static_cast<int>(sy + sh) / chunk_px + 1);
-        const bool minors = xf.k >= kMinorLinesFrom;
-        for (int pass = 0; pass < 2; ++pass) { // minor lines first, majors on top
-            const bool major_pass = pass == 1;
-            if (!major_pass && !minors) {
-                continue;
-            }
-            SDL_SetRenderDrawColor(renderer_, 20, 16, 12, major_pass ? kMajorAlpha : kMinorAlpha);
-            for (int cy = cy0; cy <= cy1; ++cy) {
-                for (int cx = cx0; cx <= cx1; ++cx) {
-                    for (const ContourSegment& s : contours_.chunk(cx, cy)) {
-                        if (s.major == major_pass) {
-                            SDL_RenderLine(renderer_, xf.x(s.x0), xf.y(s.y0), xf.x(s.x1),
-                                           xf.y(s.y1));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Fog: one texel per cell, stretched with linear filtering.
     if (fog_shown_ && core_) {
         SDL_RenderTexture(renderer_, fog_, &src, &dst);
@@ -353,18 +273,17 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
     }
 }
 
-void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, const GenParams& p,
-                                 SubCell top_left, bool legal, int base_px) const {
+void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_left, bool legal,
+                                 int range_px) const {
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
     const PointPx centre = centre_of(top_left, kLightSub);
-    const int tower = ground_at(map, centre);
-    // Within the farthest possible reach: cells it reaches and sees get a light tint; the rest are
-    // shaded, so the reach's real (non-circular) shape and blocked sight lines show.
-    const int reach = max_reach(base_px, p);
+    // Within its reach (a circle): cells it sees get a light tint; cells hidden behind rock
+    // formations are shaded, so blocked sight lines show.
+    const int reach = range_px;
     const long long reach2 = static_cast<long long>(reach) * reach;
     for (int cy = (centre.y - reach) / kCellPx; cy <= (centre.y + reach) / kCellPx; ++cy) {
         for (int cx = (centre.x - reach) / kCellPx; cx <= (centre.x + reach) / kCellPx; ++cx) {
-            if (!map.height.in_bounds(cx, cy)) {
+            if (!map.formation.in_bounds(cx, cy)) {
                 continue;
             }
             const PointPx c = centre_of(Cell{cx, cy});
@@ -374,8 +293,7 @@ void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, const GenPara
             if (d2 > reach2) {
                 continue;
             }
-            const bool covered = in_reach(base_px, tower, map.height.at(cx, cy), dx, dy, p) &&
-                                 can_see(map, centre, c, p);
+            const bool covered = can_see(map, centre, c);
             if (covered) {
                 SDL_SetRenderDrawColor(renderer_, 250, 220, 120, 40);
             } else {

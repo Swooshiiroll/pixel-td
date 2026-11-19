@@ -10,8 +10,7 @@
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
 //                       subgrid; repeatable)
-//     --overlay NAME    developer tool: start in an overlay: elevation, octave1, octave2, octave3,
-//                       height, mesa, rough or material (issue #13)
+//     --overlay NAME    developer tool: start in an overlay: rough or material (issue #13)
 //     --zoom STEP       developer tool: start at `whole` (the whole map), `half`, or the
 //                       whole-number scale N
 //     --no-fog          developer tool: start with the fog hidden (F toggles it)
@@ -137,8 +136,7 @@ bool parse_options(int argc, char** argv, Options& out) {
             out.probes.push_back(c);
         } else if (std::strcmp(argv[i], "--overlay") == 0 && has_value) {
             if (!parse_overlay(argv[++i], out.overlay)) {
-                std::fprintf(stderr, "--overlay takes elevation, octave1, octave2, octave3, "
-                                     "height, mesa, rough or material\n");
+                std::fprintf(stderr, "--overlay takes rough or material\n");
                 return false;
             }
         } else if (std::strcmp(argv[i], "--zoom") == 0 && has_value) {
@@ -206,9 +204,9 @@ bool overlap(SubCell a, int a_size, SubCell b, int b_size) {
     return a.x < b.x + b_size && b.x < a.x + a_size && a.y < b.y + b_size && b.y < a.y + a_size;
 }
 
-// A probe can go where a light tower could: flat, buildable ground, off the core and other probes.
+// A probe can go where a light tower could: off rock formations, the core and other probes.
 bool probe_fits(const World& world, SubCell top_left) {
-    if (!placement_ok(world.map, top_left, kLightSub, world.params)) {
+    if (!placement_ok(world.map, top_left, kLightSub)) {
         return false;
     }
     if (world.map.core && overlap(top_left, kLightSub, *world.map.core, kCoreSub)) {
@@ -224,8 +222,8 @@ bool place_probe(World& world, MapView& view, SubCell top_left) {
         return false;
     }
     world.probes.push_back(top_left);
-    const Rect lifted = world.fog.explore_from(world.map, centre_of(top_left, kLightSub),
-                                               world.probe_range_px(), world.params);
+    const Rect lifted =
+        world.fog.explore_from(world.map, centre_of(top_left, kLightSub), world.probe_range_px());
     view.update_fog(world.fog, lifted);
     return true;
 }
@@ -240,7 +238,7 @@ bool new_map(World& world, MapView& view, std::uint64_t seed) {
     world.fog.explore_core(world.map, world.params.light_range_px);
     const Map& m = world.map;
     const bool ok = view.set_map(m, world.layers, world.fog);
-    world.stats = game::measure(m, world.params, world.gen_ms, view.bake_ms());
+    world.stats = game::measure(m, world.gen_ms, view.bake_ms());
     SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
             "subcell %d,%d; %zu spawns",
             static_cast<unsigned long long>(seed), world.gen_ms, m.stats.attempts,
@@ -362,44 +360,16 @@ void zoom_by(SDL_Renderer* r, Screen& s, CameraPos& cam, int delta, int px, int 
 void describe_overlay(const World& world, Overlay overlay, Cell hover, char* out, std::size_t n) {
     const GenLayers& L = world.layers;
     const Map& m = world.map;
-    if (!m.height.in_bounds(hover)) {
+    if (!m.formation.in_bounds(hover)) {
         std::snprintf(out, n, "view: %s", overlay_label(overlay));
-        return;
-    }
-    if (overlay == Overlay::Elevation) {
-        std::snprintf(out, n, "view: %s  height %d", overlay_label(overlay), m.height.at(hover));
         return;
     }
     if (!L.valid) {
         std::snprintf(out, n, "view: %s  fallback map: no noise", overlay_label(overlay));
         return;
     }
-    int value = 0;
-    switch (overlay) {
-    case Overlay::Octave1:
-        value = L.octave[0].at(hover);
-        break;
-    case Overlay::Octave2:
-        value = L.octave[1].at(hover);
-        break;
-    case Overlay::Octave3:
-        value = L.octave[2].at(hover);
-        break;
-    case Overlay::Height:
-        value = L.height_sum.at(hover);
-        break;
-    case Overlay::Mesa:
-        value = L.mesa_noise.at(hover);
-        break;
-    case Overlay::Rough:
-        value = L.rough.at(hover);
-        break;
-    default:
-        value = L.material.at(hover);
-        break;
-    }
-    std::snprintf(out, n, "view: %s  value %d%s", overlay_label(overlay), value,
-                  overlay == Overlay::Mesa && L.mesa.at(hover) != 0 ? " (terraced)" : "");
+    const int value = overlay == Overlay::Rough ? L.rough.at(hover) : L.material.at(hover);
+    std::snprintf(out, n, "view: %s  value %d", overlay_label(overlay), value);
 }
 
 // The HUD, drawn into the current target `width` pixels wide (in HUD pixels).
@@ -409,13 +379,10 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
     char ground[64] = "";
     char zoom[32];
     const Map& m = world.map;
-    if (m.height.in_bounds(hover)) {
+    if (m.formation.in_bounds(hover)) {
         static constexpr const char* kNames[kMaterials] = {"dust", "gravel", "ash", "rust"};
-        const char* what = is_formation(m, hover)                    ? "rock formation"
-                           : is_cliff_cell(m, hover, world.params)   ? "cliff"
-                           : footprint_ok(m, hover, 1, world.params) ? "buildable"
-                                                                     : "";
-        std::snprintf(ground, sizeof ground, "h%d %s %s", m.height.at(hover),
+        const char* what = is_formation(m, hover) ? "rock formation" : "buildable";
+        std::snprintf(ground, sizeof ground, "%s %s",
                       kNames[static_cast<int>(m.material.at(hover))], what);
     }
     if (s.zoom.den == 1) {
@@ -790,8 +757,8 @@ int main(int argc, char** argv) {
                 view.draw_probe(xf, c, kProbeColour);
             }
             if (probe_mode) {
-                view.draw_probe_preview(xf, world.map, world.params, probe_at,
-                                        probe_fits(world, probe_at), world.probe_range_px());
+                view.draw_probe_preview(xf, world.map, probe_at, probe_fits(world, probe_at),
+                                        world.probe_range_px());
             }
             // The HUD at the standard view's text size: scaled up in the window-sized target.
             const int hud = crisp ? 1 : std::max(1, screen.out_h / kStandardViewH);

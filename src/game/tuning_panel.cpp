@@ -51,31 +51,28 @@ bool load_preset_file(const std::string& path, GenParams& out, std::string& erro
     return ok;
 }
 
-MapStats measure(const Map& map, const GenParams& p, double gen_ms, double bake_ms) {
+MapStats measure(const Map& map, double gen_ms, double bake_ms) {
     MapStats s;
     s.attempts = map.stats.attempts;
     s.fallback = map.stats.fallback;
     s.gen_ms = gen_ms;
     s.bake_ms = bake_ms;
-    int cliff = 0;
     int formation = 0;
     int spots = 0;
     int buildable = 0;
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
             formation += map.formation.at(x, y) != 0 ? 1 : 0;
-            cliff += is_cliff_cell(map, {x, y}, p) ? 1 : 0;
             if (x % 2 == 0 && y % 2 == 0) {
                 ++spots;
-                buildable += placement_ok(map, SubCell{x * 2, y * 2}, kLightSub, p) ? 1 : 0;
+                buildable += placement_ok(map, SubCell{x * 2, y * 2}, kLightSub) ? 1 : 0;
             }
         }
     }
     const double cells = static_cast<double>(kMapW) * kMapH;
-    s.cliff_pct = 100.0 * cliff / cells;
     s.formation_pct = 100.0 * formation / cells;
     s.buildable_pct = spots > 0 ? 100.0 * buildable / spots : 0.0;
-    const Grid<int> dist = walk_distance_to_core(map, p);
+    const Grid<int> dist = walk_distance_to_core(map);
     for (std::size_t i = 0; i < map.spawns.size() && i < s.spawn_walk.size(); ++i) {
         s.spawn_walk[i] = dist.at(map.spawns[i].cell);
     }
@@ -183,40 +180,18 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
         ImGui::Text("attempt %d   gen %.1f ms   bake %.0f ms", stats.attempts, stats.gen_ms,
                     stats.bake_ms);
     }
-    ImGui::Text("cliffs %.1f%%   formations %.1f%%   buildable %.0f%%", stats.cliff_pct,
-                stats.formation_pct, stats.buildable_pct);
+    ImGui::Text("formations %.1f%%   buildable %.0f%%", stats.formation_pct, stats.buildable_pct);
     ImGui::Text("spawn walks: %d, %d, %d steps", stats.spawn_walk[0], stats.spawn_walk[1],
                 stats.spawn_walk[2]);
 
     // --- Generator numbers
-    if (ImGui::CollapsingHeader("Height", ImGuiTreeNodeFlags_DefaultOpen)) {
-        noise_controls("height", params.height);
-        slider("ground max", &params.ground_max, 1, 200);
-    }
-    if (ImGui::CollapsingHeader("Mesas", ImGuiTreeNodeFlags_DefaultOpen)) {
-        slider("share %", &params.mesa_share_pct, 0, 100);
-        slider("terrace step", &params.mesa_band, 1, 200);
-        slider("feather (cells)", &params.mesa_feather_cells, 0, 64);
-        slider("table relief", &params.mesa_relief, 0, params.mesa_band);
-        if (ImGui::TreeNode("mesa noise")) {
-            noise_controls("mesa", params.mesa_noise);
-            ImGui::TreePop();
-        }
-    }
-    if (ImGui::CollapsingHeader("Cliffs and building")) {
-        slider("cliff step", &params.cliff_step, 1, 255);
-        slider("cliff share min %", &params.cliff_share_min_pct, 0, 100);
-        slider("cliff share max %", &params.cliff_share_max_pct, 0, 100);
-        slider("flat limit", &params.flat_limit, 0, 255);
-    }
-    if (ImGui::CollapsingHeader("Rock formations")) {
-        slider("count min", &params.formations_min, 0, 512);
-        slider("count max", &params.formations_max, 0, 512);
+    if (ImGui::CollapsingHeader("Rock formations", ImGuiTreeNodeFlags_DefaultOpen)) {
+        slider("count min", &params.formations_min, 0, 1024);
+        slider("count max", &params.formations_max, 0, 1024);
         slider("radius min", &params.formation_radius_min, 1, 64);
         slider("radius max", &params.formation_radius_max, 1, 64);
         slider("scale min %", &params.formation_scale_min_pct, 0, 400);
         slider("scale max %", &params.formation_scale_max_pct, 0, 400);
-        slider("height min", &params.formation_height_min, 1, 255);
         slider("share max %", &params.formation_share_max_pct, 0, 100);
         if (ImGui::TreeNode("roughness noise")) {
             noise_controls("rough", params.formation_rough);
@@ -239,15 +214,10 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
     if (ImGui::CollapsingHeader("Retries")) {
         slider("attempts", &params.attempts, 1, 256);
     }
-    // Not generation: these change what towers (and probes) reach and see, so the map stays as it
-    // is; fog and probes update on the next regenerate.
-    if (ImGui::CollapsingHeader("Towers, sight and range")) {
+    // Not generation: this changes what towers (and probes) reach, so the map stays as it is; fog
+    // and probes update on the next regenerate.
+    if (ImGui::CollapsingHeader("Towers and range")) {
         slider("light range (px)", &params.light_range_px, 8, 400);
-        slider("eye height", &params.eye_height, 0, 60);
-        slider("target height", &params.target_height, 0, 60);
-        slider("range % per grade", &params.range_pct_per_grade, 0, 100);
-        slider("range max +/- %", &params.range_slope_max_pct, 0, 99);
-        ImGui::TextDisabled("grade = fall per cell between tower and target");
     }
 
     // --- Presets (settings only)

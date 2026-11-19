@@ -20,12 +20,11 @@ struct MapStats {
     bool fallback = false;
     double gen_ms = 0.0;
     double bake_ms = 0.0;
-    double cliff_pct = 0.0;
     double formation_pct = 0.0;
     double buildable_pct = 0.0;                // light-tower spots, sampled every 2 cells
     std::array<int, 3> spawn_walk{-1, -1, -1}; // walking steps from each spawn to the core
 };
-[[nodiscard]] MapStats measure(const Map& map, const GenParams& p, double gen_ms, double bake_ms);
+[[nodiscard]] MapStats measure(const Map& map, double gen_ms, double bake_ms);
 
 // The developer map-tuning panel (issue #23): a Dear ImGui window with the seed, every generator
 // number, live stats and presets. It edits the settings and the seed; the caller regenerates.

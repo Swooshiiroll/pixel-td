@@ -47,11 +47,9 @@ Rect Fog::explore_core(const Map& map, int range_px) {
     return box;
 }
 
-Rect Fog::explore_from(const Map& map, PointPx centre, int base_px, const GenParams& p) {
+Rect Fog::explore_from(const Map& map, PointPx centre, int range_px) {
     Rect box{};
-    const int tower = ground_at(map, centre);
-    // The farthest any cell could be in reach: the base range with the full downhill stretch.
-    const int reach = max_reach(base_px, p);
+    const int reach = range_px;
     const int x0 = std::max(0, (centre.x - reach) / kCellPx);
     const int y0 = std::max(0, (centre.y - reach) / kCellPx);
     const int x1 = std::min(kMapW - 1, (centre.x + reach) / kCellPx);
@@ -64,8 +62,7 @@ Rect Fog::explore_from(const Map& map, PointPx centre, int base_px, const GenPar
             const PointPx c = centre_of(Cell{x, y});
             const long long dx = c.x - centre.x;
             const long long dy = c.y - centre.y;
-            if (in_reach(base_px, tower, map.height.at(x, y), dx, dy, p) &&
-                can_see(map, centre, c, p)) {
+            if (in_reach(range_px, dx, dy) && can_see(map, centre, c)) {
                 explored_.at(x, y) = 1;
                 include(box, {x, y});
             }

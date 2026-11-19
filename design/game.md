@@ -37,7 +37,7 @@ edges or inside it.
   steps to the whole map, is the one exception: those steps are drawn shrunk and smooth.
 - The map is 15360 x 8640 px: 36 1440p screens, or 576 views at the default zoom.
   The camera pans and zooms in whole-number steps, then out to the whole map ([world.md](world.md)).
-- The terrain is a seamless heightmap: brightness shows height, and hue shows the ground material.
+- The terrain is flat ground, coloured by its material, scattered with rock formations (#30).
 - A hidden grid of 16 px cells (960 x 540) sits under it, for terrain and pathfinding.
 - Towers and the core snap to an 8 px placement subgrid.
   - A light tower is 3x3 subcells (24 px).
@@ -77,9 +77,9 @@ The owner chose **arena first**: towers are designed in the game from the start.
 real map generator, so the generator comes first.
 
 1. **Map generator** ([world.md](world.md)):
-   - the heightmap: hills, mesas, cliffs and rock formations;
+   - flat ground with materials, and rock formations;
    - the seeded core near the centre and 3 seeded spawns;
-   - line of sight and height-based range;
+   - line of sight past rock formations, and circular range;
    - fog;
    - the camera.
 2. **Test arena + live tuning** (`test-arena.md`), together with **enemy pathfinding and mazing**
