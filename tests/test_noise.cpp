@@ -240,7 +240,8 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
     for (std::uint64_t seed = 0; seed < 20; ++seed) {
         CAPTURE(seed);
         GenParams p;
-        for (NoiseSpec* n : {&p.height, &p.mesa_noise, &p.formation_rough, &p.material_noise}) {
+        for (NoiseSpec* n :
+             {&p.height, &p.natural_height, &p.mesa_noise, &p.formation_rough, &p.material_noise}) {
             n->step = pick(2, 160);
             n->octaves = pick(1, kMaxOctaves);
             n->lacunarity_pct = pick(10, 100);
@@ -249,6 +250,7 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
             n->shape = static_cast<Shape>(pick(0, kShapes - 1));
             n->warp_cells = pick(0, 1) == 0 ? 0 : pick(1, 64);
             n->warp_step = pick(2, 160);
+            n->basis = static_cast<Basis>(pick(0, kBases - 1));
         }
         p.mesa_share_pct = pick(0, 100);
         p.mesa_band = pick(1, 60);
@@ -256,6 +258,17 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
         p.mesa_relief = pick(0, 60);
         p.formations_min = pick(0, 20);
         p.formations_max = pick(0, 30);
+        p.terrain = static_cast<TerrainAlgo>(pick(0, kTerrainAlgos - 1));
+        p.erosion_droplets = pick(0, 20000); // few: erosion is slow
+        p.erosion_lifetime = pick(1, 64);
+        p.erosion_inertia_pct = pick(0, 99);
+        p.erosion_capacity_pct = pick(0, 2000);
+        p.erosion_min_slope_pct = pick(0, 200);
+        p.erosion_erode_pct = pick(0, 100);
+        p.erosion_deposit_pct = pick(0, 100);
+        p.erosion_evaporate_pct = pick(1, 100);
+        p.erosion_gravity_pct = pick(0, 2000);
+        p.erosion_radius = pick(1, 8);
         p.attempts = 4; // keep the sweep quick: hard settings fall back sooner
         validate(p);
         GenLayers L;

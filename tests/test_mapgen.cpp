@@ -1,13 +1,19 @@
 #include "core/mapgen.hpp"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include <doctest/doctest.h>
 
 #include "core/hash.hpp"
+#include "core/preset.hpp"
 #include "core/terrain.hpp"
 
 using namespace pixeltd;
@@ -81,7 +87,9 @@ void check_map(const Map& m, const GenParams& p) {
     }
     REQUIRE(heights_ok);
     REQUIRE(formation * 100 <= p.formation_share_max_pct * kCells);
-    REQUIRE(cliff * 100 >= p.cliff_share_min_pct * kCells);
+    const int cliff_min =
+        p.terrain == TerrainAlgo::Value ? p.cliff_share_min_pct : p.natural_cliff_share_min_pct;
+    REQUIRE(cliff * 100 >= cliff_min * kCells);
     REQUIRE(cliff * 100 <= p.cliff_share_max_pct * kCells);
 }
 
@@ -109,11 +117,33 @@ TEST_CASE("different seeds give different maps") {
 
 // Pinned results: these must match on every compiler and platform (MSVC locally, GCC on CI). If
 // the generator is changed on purpose, update the values in the same pull request and say why.
-// Last re-pinned in #25: the map grew to 960 x 540 cells (3 x 3).
+// Last re-pinned in #29: rock formations removed for now (the owner), and the simplex and eroded
+// terrains pinned too.
 TEST_CASE("golden maps") {
-    CHECK(map_hash(generate_map(1)) == 0xafc2e96bac4c618eull);
-    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0x1a7f77b005aeaa32ull);
-    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0x18b9c5acf06bbf71ull);
+    CHECK(map_hash(generate_map(1)) == 0xeb411111e202afb9ull);
+    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0xff18f5054ef6474dull);
+    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0x7a28b741e0966d8cull);
+    GenParams simplex;
+    simplex.terrain = TerrainAlgo::Simplex;
+    CHECK(map_hash(generate_map(1, simplex)) == 0x485e645962520accull);
+    GenParams eroded;
+    eroded.terrain = TerrainAlgo::Eroded;
+    CHECK(map_hash(generate_map(1, eroded)) == 0xe4eda257631b34acull);
+}
+
+TEST_CASE("the simplex and eroded terrains give valid maps") {
+    for (const TerrainAlgo algo : {TerrainAlgo::Simplex, TerrainAlgo::Eroded}) {
+        GenParams p;
+        p.terrain = algo;
+        const std::uint64_t seeds = algo == TerrainAlgo::Eroded ? 3 : 8; // erosion is slow
+        for (std::uint64_t seed = 1; seed <= seeds; ++seed) {
+            CAPTURE(static_cast<int>(algo));
+            CAPTURE(seed);
+            const Map m = generate_map(seed, p);
+            REQUIRE_FALSE(m.stats.fallback);
+            check_map(m, p);
+        }
+    }
 }
 
 TEST_CASE("cliff steps block walking both ways and building beside them") {
@@ -271,4 +301,75 @@ TEST_CASE("map stats (manual)" * doctest::skip()) {
             400.0 * static_cast<double>(buildable) / cells);
     MESSAGE("edge spawns % ", 100.0 * edge_spawns / (3.0 * kSeeds), "  spawn walk avg ",
             static_cast<double>(spawn_dist) / (3.0 * kSeeds));
+}
+
+// An environment variable, or nullptr (MSVC warns about getenv; it's fine in a manual test).
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+const char* env(const char* name) {
+    return std::getenv(name);
+}
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+// Manual comparison aid for the terrains (#29): pixeltd_tests -tc="*terrain compare*" --no-skip
+// Optional: PIXELTD_PRESET=file (settings for every terrain), PIXELTD_TERRAIN=0|1|2 (only that
+// one).
+TEST_CASE("terrain compare (manual)" * doctest::skip()) {
+    constexpr int kSeeds = 4;
+    GenParams base;
+    if (const char* file = env("PIXELTD_PRESET"); file != nullptr) {
+        std::ifstream in(file);
+        std::stringstream text;
+        text << in.rdbuf();
+        std::string errors;
+        from_preset(text.str(), base, errors);
+        MESSAGE("preset ", file, " ", errors);
+    }
+    const char* only = env("PIXELTD_TERRAIN");
+    for (const TerrainAlgo algo : {TerrainAlgo::Value, TerrainAlgo::Simplex, TerrainAlgo::Eroded}) {
+        if (only != nullptr && std::atoi(only) != static_cast<int>(algo)) {
+            continue;
+        }
+        GenParams p = base;
+        p.terrain = algo;
+        std::array<long long, 5>
+            steeper{}; // cells whose biggest step to a neighbour is >= 2,4,8,12,20
+        constexpr std::array<int, 5> kSteps = {2, 4, 8, 12, 20};
+        long long buildable = 0;
+        int fallbacks = 0;
+        double ms = 0.0;
+        for (std::uint64_t seed = 1; seed <= kSeeds; ++seed) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const Map m = generate_map(seed, p);
+            ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                      .count();
+            fallbacks += m.stats.fallback ? 1 : 0;
+            for (int y = 0; y + 1 < kMapH; ++y) {
+                for (int x = 0; x + 1 < kMapW; ++x) {
+                    const int h = m.height.at(x, y);
+                    const int s = std::max(std::abs(h - m.height.at(x + 1, y)),
+                                           std::abs(h - m.height.at(x, y + 1)));
+                    for (std::size_t k = 0; k < kSteps.size(); ++k) {
+                        steeper[k] += s >= kSteps[k] ? 1 : 0;
+                    }
+                    buildable += x % 2 == 0 && y % 2 == 0 &&
+                                         placement_ok(m, SubCell{x * 2, y * 2}, kLightSub, p)
+                                     ? 1
+                                     : 0;
+                }
+            }
+        }
+        const double cells = static_cast<double>(kSeeds) * kCells;
+        MESSAGE("terrain ", static_cast<int>(algo), "  gen ms avg ", ms / kSeeds, "  fallbacks ",
+                fallbacks, "  buildable % ", 400.0 * static_cast<double>(buildable) / cells,
+                "  step>=2/4/8/12/20 % ", 100.0 * static_cast<double>(steeper[0]) / cells, " ",
+                100.0 * static_cast<double>(steeper[1]) / cells, " ",
+                100.0 * static_cast<double>(steeper[2]) / cells, " ",
+                100.0 * static_cast<double>(steeper[3]) / cells, " ",
+                100.0 * static_cast<double>(steeper[4]) / cells);
+    }
 }

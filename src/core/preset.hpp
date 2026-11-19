@@ -29,5 +29,7 @@ bool from_preset(std::string_view text, GenParams& p, std::string& errors);
 // The names used for the enums in presets (and the tuning panel).
 [[nodiscard]] const char* curve_name(Curve c) noexcept;
 [[nodiscard]] const char* shape_name(Shape s) noexcept;
+[[nodiscard]] const char* basis_name(Basis b) noexcept;
+[[nodiscard]] const char* terrain_name(TerrainAlgo t) noexcept;
 
 } // namespace pixeltd

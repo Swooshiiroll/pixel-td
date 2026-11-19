@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/erosion.hpp"
 #include "core/gen_util.hpp"
 #include "core/hash.hpp"
 #include "core/rng.hpp"
@@ -116,6 +117,37 @@ void make_height(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
     }
 }
 
+// The natural terrains (#29): simplex octaves stretched to 0..ground_max, with no mesas. For the
+// eroded terrain, hydraulic erosion then runs on the heights in fixed point, and the result is
+// stretched again so it still spans 0..ground_max.
+void make_natural_height(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
+    Grid<int>& field = out.height_sum;
+    fill_noise(field, rng, p.natural_height, &out.octave, &out.octave_weight);
+    const auto stretch = [&](const Grid<int>& g, long long scale) {
+        const auto [lo_it, hi_it] = std::minmax_element(g.cells().begin(), g.cells().end());
+        const long long lo = *lo_it;
+        const long long span = std::max(1LL, static_cast<long long>(*hi_it) - lo);
+        Grid<int> s(kMapW, kMapH, 0);
+        for (int y = 0; y < kMapH; ++y) {
+            for (int x = 0; x < kMapW; ++x) {
+                s.at(x, y) = static_cast<int>((g.at(x, y) - lo) * p.ground_max * scale / span);
+            }
+        }
+        return s;
+    };
+    Grid<int> q = stretch(field, kErosionOne); // heights in 1/65536 units
+    if (p.terrain == TerrainAlgo::Eroded) {
+        erode(q, rng, p);
+        q = stretch(q, kErosionOne);
+    }
+    for (int y = 0; y < kMapH; ++y) {
+        for (int x = 0; x < kMapW; ++x) {
+            const int h = static_cast<int>((q.at(x, y) + kErosionOne / 2) / kErosionOne);
+            map.height.at(x, y) = static_cast<std::uint8_t>(std::clamp(h, 0, p.ground_max));
+        }
+    }
+}
+
 // Rock formations: blobs with noise-shaped edges, standing at formation_height_min..255.
 void place_formations(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
     Grid<int>& rough = out.rough;
@@ -163,8 +195,10 @@ bool shares_ok(const Map& map, const GenParams& p) {
             cliff += is_cliff_cell(map, {x, y}, p) ? 1 : 0;
         }
     }
+    const int cliff_min =
+        p.terrain == TerrainAlgo::Value ? p.cliff_share_min_pct : p.natural_cliff_share_min_pct;
     return formation * 100 <= p.formation_share_max_pct * kCellCount &&
-           cliff * 100 >= p.cliff_share_min_pct * kCellCount &&
+           cliff * 100 >= cliff_min * kCellCount &&
            cliff * 100 <= p.cliff_share_max_pct * kCellCount;
 }
 
@@ -331,7 +365,11 @@ Map generate_map(std::uint64_t seed, const GenParams& params, GenLayers* layers)
         map.seed = seed;
         map.core_area = p.core_area;
         GenLayers noise;
-        make_height(map, rng, p, noise);
+        if (p.terrain == TerrainAlgo::Value) {
+            make_height(map, rng, p, noise);
+        } else {
+            make_natural_height(map, rng, p, noise);
+        }
         place_formations(map, rng, p, noise);
         paint_materials(map, rng, p, noise);
         if (!shares_ok(map, p)) {

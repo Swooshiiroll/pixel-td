@@ -12,6 +12,8 @@ namespace {
 
 constexpr std::array<const char*, kCurves> kCurveNames = {"linear", "smoothstep", "quintic"};
 constexpr std::array<const char*, kShapes> kShapeNames = {"normal", "ridged", "billowed"};
+constexpr std::array<const char*, kBases> kBasisNames = {"value", "simplex"};
+constexpr std::array<const char*, kTerrainAlgos> kTerrainNames = {"value", "simplex", "eroded"};
 
 // A plain int value in GenParams.
 struct IntKey {
@@ -31,8 +33,9 @@ struct NoiseIntKey {
     int NoiseSpec::* field;
 };
 
-constexpr std::array<NoiseKey, 4> kNoise = {{
+constexpr std::array<NoiseKey, 5> kNoise = {{
     {"height", &GenParams::height},
+    {"natural_height", &GenParams::natural_height},
     {"mesa_noise", &GenParams::mesa_noise},
     {"formation_rough", &GenParams::formation_rough},
     {"material_noise", &GenParams::material_noise},
@@ -52,8 +55,18 @@ struct Entry {
     const char* section;
     IntKey key;
 };
-constexpr std::array<Entry, 27> kInts = {{
+constexpr std::array<Entry, 38> kInts = {{
     {"Height", {"ground_max", &GenParams::ground_max}},
+    {"Erosion (the eroded terrain)", {"erosion_droplets", &GenParams::erosion_droplets}},
+    {nullptr, {"erosion_lifetime", &GenParams::erosion_lifetime}},
+    {nullptr, {"erosion_inertia_pct", &GenParams::erosion_inertia_pct}},
+    {nullptr, {"erosion_capacity_pct", &GenParams::erosion_capacity_pct}},
+    {nullptr, {"erosion_min_slope_pct", &GenParams::erosion_min_slope_pct}},
+    {nullptr, {"erosion_erode_pct", &GenParams::erosion_erode_pct}},
+    {nullptr, {"erosion_deposit_pct", &GenParams::erosion_deposit_pct}},
+    {nullptr, {"erosion_evaporate_pct", &GenParams::erosion_evaporate_pct}},
+    {nullptr, {"erosion_gravity_pct", &GenParams::erosion_gravity_pct}},
+    {nullptr, {"erosion_radius", &GenParams::erosion_radius}},
     {"Mesas", {"mesa_share_pct", &GenParams::mesa_share_pct}},
     {nullptr, {"mesa_band", &GenParams::mesa_band}},
     {nullptr, {"mesa_feather_cells", &GenParams::mesa_feather_cells}},
@@ -61,6 +74,7 @@ constexpr std::array<Entry, 27> kInts = {{
     {"Cliffs and building", {"cliff_step", &GenParams::cliff_step}},
     {nullptr, {"cliff_share_min_pct", &GenParams::cliff_share_min_pct}},
     {nullptr, {"cliff_share_max_pct", &GenParams::cliff_share_max_pct}},
+    {nullptr, {"natural_cliff_share_min_pct", &GenParams::natural_cliff_share_min_pct}},
     {nullptr, {"flat_limit", &GenParams::flat_limit}},
     {"Rock formations", {"formations_min", &GenParams::formations_min}},
     {nullptr, {"formations_max", &GenParams::formations_max}},
@@ -151,9 +165,21 @@ const char* shape_name(Shape s) noexcept {
     return i < kShapeNames.size() ? kShapeNames[i] : "normal";
 }
 
+const char* basis_name(Basis b) noexcept {
+    const auto i = static_cast<std::size_t>(b);
+    return i < kBasisNames.size() ? kBasisNames[i] : "value";
+}
+
+const char* terrain_name(TerrainAlgo t) noexcept {
+    const auto i = static_cast<std::size_t>(t);
+    return i < kTerrainNames.size() ? kTerrainNames[i] : "value";
+}
+
 std::string to_preset(const GenParams& p) {
     std::string out = "# Pixel TD map generator preset: settings only (no seed).\n";
     out += "# Curves: linear | smoothstep | quintic. Shapes: normal | ridged | billowed.\n";
+    out += "# Bases: value | simplex. Terrains: value | simplex | eroded.\n";
+    out.append("\nterrain = ").append(terrain_name(p.terrain)).append("\n");
     for (const NoiseKey& n : kNoise) {
         const NoiseSpec& spec = p.*(n.field);
         out.append("\n# Noise: ").append(n.prefix).append("\n");
@@ -163,6 +189,7 @@ std::string to_preset(const GenParams& p) {
         }
         out.append(prefix).append("curve = ").append(curve_name(spec.curve)).append("\n");
         out.append(prefix).append("shape = ").append(shape_name(spec.shape)).append("\n");
+        out.append(prefix).append("basis = ").append(basis_name(spec.basis)).append("\n");
     }
     for (const Entry& e : kInts) {
         if (e.section != nullptr) {
@@ -246,6 +273,12 @@ bool from_preset(std::string_view text, GenParams& p, std::string& errors) {
                 if (ok) {
                     spec.shape = static_cast<Shape>(e);
                 }
+            } else if (name == "basis") {
+                known = true;
+                ok = parse_name(value, kBasisNames, e);
+                if (ok) {
+                    spec.basis = static_cast<Basis>(e);
+                }
             }
         }
         for (const Entry& e : kInts) {
@@ -257,6 +290,14 @@ bool from_preset(std::string_view text, GenParams& p, std::string& errors) {
         if (int* area = core_area_field(p, key); area != nullptr) {
             known = true;
             ok = parse_int(value, *area);
+        }
+        if (key == "terrain") {
+            known = true;
+            int t = 0;
+            ok = parse_name(value, kTerrainNames, t);
+            if (ok) {
+                p.terrain = static_cast<TerrainAlgo>(t);
+            }
         }
         if (key == "spawn_waves") {
             known = true;

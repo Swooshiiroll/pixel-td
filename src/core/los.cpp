@@ -1,6 +1,7 @@
 #include "core/los.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 
 namespace pixeltd {
@@ -15,14 +16,20 @@ int isqrt(long long v) noexcept {
     if (v <= 0) {
         return 0;
     }
-    // Newton's method on integers, from an estimate above the root.
-    long long r = v;
-    long long next = (r + 1) / 2;
-    while (next < r) {
-        r = next;
-        next = (r + v / r) / 2;
+    // Digit by digit (base 4), with no division: fast enough for erosion's millions of calls.
+    auto n = static_cast<unsigned long long>(v);
+    unsigned long long root = 0;
+    unsigned long long bit = 1ull << ((std::bit_width(n) - 1) & ~1);
+    while (bit != 0) {
+        if (n >= root + bit) {
+            n -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
     }
-    return static_cast<int>(r);
+    return static_cast<int>(root);
 }
 
 int effective_range(int base_px, int tower_ground, int target_ground, int distance_px,

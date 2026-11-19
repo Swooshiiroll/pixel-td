@@ -11,6 +11,7 @@
 #include "core/gen_params.hpp"
 #include "core/grid.hpp"
 #include "core/rng.hpp"
+#include "core/simplex.hpp"
 
 namespace pixeltd::gen {
 
@@ -127,6 +128,12 @@ inline int sample(const Lattice& l, const std::vector<int>& ease, int x, int y) 
     }
 }
 
+// A 64-bit seed for one simplex octave (two draws).
+inline std::uint64_t draw_seed(Rng& rng) {
+    const std::uint64_t hi = rng.next_u32();
+    return (hi << 32u) | rng.next_u32();
+}
+
 // Weights of a layer's octaves, first to last: the first is 4096, then each the previous times
 // persistence_pct / 100. With 3 octaves at 50%: 4096, 2048, 1024 (4 : 2 : 1).
 inline constexpr int kFirstOctaveWeight = 4096;
@@ -135,7 +142,8 @@ inline constexpr int kFirstOctaveWeight = 4096;
 // at domain-warped points if warp is on. Returns the sum of the weights, so out / weight is the
 // layer's 0..255 value.
 //
-// Draws: each octave's lattice in order, then (only if warp_cells > 0) the two warp lattices. With
+// Draws: each octave's lattice (or, for simplex, its seed) in order, then (only if
+// warp_cells > 0) the two warp lattices (or seeds). With
 // one octave, or 3 at 50% lacunarity and persistence, and the smoothstep curve, normal shape and
 // no warp, the draws and the maths are exactly those of add_value_noise before #21.
 // If `octaves_out` isn't null, the first three octaves' values (0..255) are written there and
@@ -149,13 +157,21 @@ inline int fill_noise(Grid<int>& out, Rng& rng, const NoiseSpec& n,
     std::array<Lattice, kMaxOctaves> lattices;
     std::array<std::vector<int>, kMaxOctaves> eases;
     std::array<int, kMaxOctaves> weights{};
+    std::array<int, kMaxOctaves> steps{};
+    std::array<std::uint64_t, kMaxOctaves> seeds{};
+    const bool simplex = n.basis == Basis::Simplex;
     int step = std::max(2, n.step);
     int weight = kFirstOctaveWeight;
     int total = 0;
     for (int i = 0; i < count; ++i) {
         const auto k = static_cast<std::size_t>(i);
-        lattices[k] = make_lattice(rng, w, h, step);
-        eases[k] = make_ease(step, n.curve);
+        if (simplex) {
+            seeds[k] = draw_seed(rng);
+        } else {
+            lattices[k] = make_lattice(rng, w, h, step);
+            eases[k] = make_ease(step, n.curve);
+        }
+        steps[k] = step;
         weights[k] = weight;
         total += weight;
         step = std::max(2, step * n.lacunarity_pct / 100);
@@ -165,8 +181,13 @@ inline int fill_noise(Grid<int>& out, Rng& rng, const NoiseSpec& n,
     Lattice warp_x;
     Lattice warp_y;
     std::vector<int> warp_ease;
-    if (warp) {
-        const int ws = std::max(2, n.warp_step);
+    std::uint64_t warp_seed_x = 0;
+    std::uint64_t warp_seed_y = 0;
+    const int ws = std::max(2, n.warp_step);
+    if (warp && simplex) {
+        warp_seed_x = draw_seed(rng);
+        warp_seed_y = draw_seed(rng);
+    } else if (warp) {
         warp_x = make_lattice(rng, w, h, ws);
         warp_y = make_lattice(rng, w, h, ws);
         warp_ease = make_ease(ws, Curve::Smoothstep);
@@ -182,15 +203,19 @@ inline int fill_noise(Grid<int>& out, Rng& rng, const NoiseSpec& n,
             int sy = y;
             if (warp) {
                 // Push the sample point by up to warp_cells each way.
-                sx = std::clamp(x + (sample(warp_x, warp_ease, x, y) - 128) * n.warp_cells / 128, 0,
-                                w - 1);
-                sy = std::clamp(y + (sample(warp_y, warp_ease, x, y) - 128) * n.warp_cells / 128, 0,
-                                h - 1);
+                const int wx =
+                    simplex ? simplex_cell(warp_seed_x, x, y, ws) : sample(warp_x, warp_ease, x, y);
+                const int wy =
+                    simplex ? simplex_cell(warp_seed_y, x, y, ws) : sample(warp_y, warp_ease, x, y);
+                sx = std::clamp(x + (wx - 128) * n.warp_cells / 128, 0, w - 1);
+                sy = std::clamp(y + (wy - 128) * n.warp_cells / 128, 0, h - 1);
             }
             int sum = 0;
             for (int i = 0; i < count; ++i) {
                 const auto k = static_cast<std::size_t>(i);
-                const int v = shape_value(sample(lattices[k], eases[k], sx, sy), n.shape);
+                const int raw = simplex ? simplex_cell(seeds[k], sx, sy, steps[k])
+                                        : sample(lattices[k], eases[k], sx, sy);
+                const int v = shape_value(raw, n.shape);
                 sum += weights[k] * v;
                 if (octaves_out != nullptr && k < octaves_out->size()) {
                     (*octaves_out)[k].at(x, y) = v;

@@ -19,6 +19,8 @@ namespace {
 
 constexpr const char* kCurveItems[] = {"linear", "smoothstep", "quintic"};
 constexpr const char* kShapeItems[] = {"normal", "ridged", "billowed"};
+constexpr const char* kBasisItems[] = {"value", "simplex"};
+constexpr const char* kTerrainItems[] = {"value (squarish, mesas)", "simplex", "simplex + erosion"};
 
 // A preset name made safe as a file name: letters, digits, '-' and '_' only.
 std::string sanitise(const char* name) {
@@ -98,6 +100,11 @@ void TuningPanel::noise_controls(const char* id, NoiseSpec& n) {
     if (n.octaves > 1) {
         slider("lacunarity %", &n.lacunarity_pct, 10, 100);
         slider("persistence %", &n.persistence_pct, 0, 100);
+    }
+    int basis = static_cast<int>(n.basis);
+    if (ImGui::Combo("basis", &basis, kBasisItems, kBases)) {
+        n.basis = static_cast<Basis>(basis);
+        commit_ = true;
     }
     int curve = static_cast<int>(n.curve);
     if (ImGui::Combo("curve", &curve, kCurveItems, kCurves)) {
@@ -189,11 +196,39 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
                 stats.spawn_walk[2]);
 
     // --- Generator numbers
+    // --- Terrain algorithm (#29)
+    ImGui::SeparatorText("Terrain");
+    int terrain = static_cast<int>(params.terrain);
+    if (ImGui::Combo("algorithm", &terrain, kTerrainItems, kTerrainAlgos)) {
+        params.terrain = static_cast<TerrainAlgo>(terrain);
+        commit_ = true;
+    }
+    const bool natural = params.terrain != TerrainAlgo::Value;
+    if (params.terrain == TerrainAlgo::Eroded) {
+        ImGui::TextDisabled("erosion takes ~1-2 s: sliders apply on release");
+    }
     if (ImGui::CollapsingHeader("Height", ImGuiTreeNodeFlags_DefaultOpen)) {
-        noise_controls("height", params.height);
+        if (natural) {
+            noise_controls("natural_height", params.natural_height);
+        } else {
+            noise_controls("height", params.height);
+        }
         slider("ground max", &params.ground_max, 1, 200);
     }
-    if (ImGui::CollapsingHeader("Mesas", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (params.terrain == TerrainAlgo::Eroded &&
+        ImGui::CollapsingHeader("Erosion", ImGuiTreeNodeFlags_DefaultOpen)) {
+        slider("droplets", &params.erosion_droplets, 0, 1000000);
+        slider("lifetime (cells)", &params.erosion_lifetime, 1, 256);
+        slider("inertia %", &params.erosion_inertia_pct, 0, 99);
+        slider("capacity %", &params.erosion_capacity_pct, 0, 2000);
+        slider("min slope (x100)", &params.erosion_min_slope_pct, 0, 200);
+        slider("erode %", &params.erosion_erode_pct, 0, 100);
+        slider("deposit %", &params.erosion_deposit_pct, 0, 100);
+        slider("evaporate %", &params.erosion_evaporate_pct, 1, 100);
+        slider("gravity %", &params.erosion_gravity_pct, 0, 2000);
+        slider("radius (cells)", &params.erosion_radius, 1, 8);
+    }
+    if (!natural && ImGui::CollapsingHeader("Mesas", ImGuiTreeNodeFlags_DefaultOpen)) {
         slider("share %", &params.mesa_share_pct, 0, 100);
         slider("terrace step", &params.mesa_band, 1, 200);
         slider("feather (cells)", &params.mesa_feather_cells, 0, 64);
@@ -207,6 +242,7 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
         slider("cliff step", &params.cliff_step, 1, 255);
         slider("cliff share min %", &params.cliff_share_min_pct, 0, 100);
         slider("cliff share max %", &params.cliff_share_max_pct, 0, 100);
+        slider("natural cliff min %", &params.natural_cliff_share_min_pct, 0, 100);
         slider("flat limit", &params.flat_limit, 0, 255);
     }
     if (ImGui::CollapsingHeader("Rock formations")) {
@@ -299,6 +335,9 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
     ImGui::PopItemWidth();
     ImGui::End();
 
+    if (params.terrain == TerrainAlgo::Eroded) {
+        preview_ = false; // too slow to regenerate while dragging: only on release
+    }
     if (preview_ || commit_) {
         validate(params);
     }

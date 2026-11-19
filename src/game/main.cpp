@@ -5,7 +5,8 @@
 // Camera).
 //
 //   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--zoom STEP] [--no-fog] [--window WxH]
-//           [--preset FILE] [--panel] [--map-shot file.bmp] [--map-scale N] [--frames N]
+//           [--preset FILE] [--terrain ALGO] [--panel] [--map-shot file.bmp] [--map-scale N]
+//           [--frames N]
 //           [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
@@ -17,6 +18,7 @@
 //     --no-fog          developer tool: start with the fog hidden (F toggles it)
 //     --window WxH      developer tool: open the window at W x H (screenshots)
 //     --preset FILE     developer tool: generate with the settings in a preset file (#21)
+//     --terrain ALGO    developer tool: value, simplex or eroded (#29; overrides the preset)
 //     --panel           developer tool: open the map-tuning panel at start (Tab toggles it)
 //     --map-shot F      developer tool: save the whole 15360x8640 map to F (BMP), shrunk by
 //                       --map-scale (2, 4 or 8; default 4: 3840x2160), then exit. With no probes
@@ -88,6 +90,7 @@ struct Options {
     int zoom_scale = 0;
     bool no_fog = false;
     const char* preset = nullptr;
+    int terrain = -1; // --terrain: a TerrainAlgo, or -1 to keep the default or the preset's
     bool panel = false;
     int map_scale = 4; // --map-shot shrinks the map by this (2, 4 or 8)
     int window_w = kStandardViewW * 2;
@@ -159,6 +162,16 @@ bool parse_options(int argc, char** argv, Options& out) {
             out.no_fog = true;
         } else if (std::strcmp(argv[i], "--preset") == 0 && has_value) {
             out.preset = argv[++i];
+        } else if (std::strcmp(argv[i], "--terrain") == 0 && has_value) {
+            const char* t = argv[++i];
+            out.terrain = std::strcmp(t, "value") == 0     ? 0
+                          : std::strcmp(t, "simplex") == 0 ? 1
+                          : std::strcmp(t, "eroded") == 0  ? 2
+                                                           : -1;
+            if (out.terrain < 0) {
+                std::fprintf(stderr, "--terrain takes value, simplex or eroded\n");
+                return false;
+            }
         } else if (std::strcmp(argv[i], "--panel") == 0) {
             out.panel = true;
         } else if (std::strcmp(argv[i], "--map-scale") == 0 && has_value) {
@@ -176,7 +189,8 @@ bool parse_options(int argc, char** argv, Options& out) {
         } else {
             std::fprintf(stderr, "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
                                  "[--zoom whole|half|N] [--no-fog] [--window WxH] [--preset FILE] "
-                                 "[--panel] [--map-shot file.bmp] [--map-scale 2|4|8] [--frames N] "
+                                 "[--terrain value|simplex|eroded] [--panel] [--map-shot file.bmp] "
+                                 "[--map-scale 2|4|8] [--frames N] "
                                  "[--screenshot file.bmp]\n");
             return false;
         }
@@ -534,6 +548,9 @@ int main(int argc, char** argv) {
         if (!game::load_preset_file(opts.preset, start_params, errors)) {
             SDL_Log("preset %s: %s", opts.preset, errors.c_str());
         }
+    }
+    if (opts.terrain >= 0) {
+        start_params.terrain = static_cast<TerrainAlgo>(opts.terrain);
     }
     if (opts.map_shot != nullptr) {
         const int code = run_map_shot(renderer, first_seed, opts.probes, opts.overlay, opts.no_fog,
