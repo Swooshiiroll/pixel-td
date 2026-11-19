@@ -150,5 +150,20 @@ TEST_CASE("generation bench (manual)" * doctest::skip()) {
         fog_max = std::max(fog_max, f);
     }
     MESSAGE("generate_map avg ", gen_total / kMaps, " ms, max ", gen_max, " ms");
+    // The same with every layer domain-warped and the height at 6 octaves.
+    GenParams heavy = p;
+    heavy.height.octaves = 6;
+    for (NoiseSpec* n :
+         {&heavy.height, &heavy.mesa_noise, &heavy.formation_rough, &heavy.material_noise}) {
+        n->warp_cells = 16;
+    }
+    double heavy_total = 0.0;
+    for (std::uint64_t seed = 0; seed < 30; ++seed) {
+        const auto t0 = clock::now();
+        const Map m = generate_map(seed, heavy);
+        heavy_total += std::chrono::duration<double, std::milli>(clock::now() - t0).count();
+        CHECK(m.core.has_value());
+    }
+    MESSAGE("generate_map, 6 octaves + warp on every layer: avg ", heavy_total / 30, " ms");
     MESSAGE("fog (core + 8 viewers) avg ", fog_total / kMaps, " ms, max ", fog_max, " ms");
 }

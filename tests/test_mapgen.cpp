@@ -109,11 +109,11 @@ TEST_CASE("different seeds give different maps") {
 
 // Pinned results: these must match on every compiler and platform (MSVC locally, GCC on CI). If
 // the generator is changed on purpose, update the values in the same pull request and say why.
-// Last re-pinned in #19: mesa terraces every 20 height units instead of 40.
+// Last re-pinned in #21: mesas feathered over 8 cells, with 6 units of relief on the tables.
 TEST_CASE("golden maps") {
-    CHECK(map_hash(generate_map(1)) == 0x8b838b4e02876b73ull);
-    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0x5f8ab6e800dba6daull);
-    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0x1d7467a75b357970ull);
+    CHECK(map_hash(generate_map(1)) == 0xc6cd205753bbc44eull);
+    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0x50b1a7bf0b78243eull);
+    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0xe5f7c6cd4ef29884ull);
 }
 
 TEST_CASE("cliff steps block walking both ways and building beside them") {

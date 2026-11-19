@@ -13,12 +13,16 @@ namespace pixeltd {
 // changes the map.
 struct GenLayers {
     bool valid = false; // false for the fallback map (it has no noise)
+    // The first three height octaves' values (0..255, shaped; zero past the octave count), and
+    // their weights in height_sum.
     std::array<Grid<int>, 3> octave{{{kMapW, kMapH, 0}, {kMapW, kMapH, 0}, {kMapW, kMapH, 0}}};
-    Grid<int> height_sum{kMapW, kMapH, 0};    // 4 * octave 1 + 2 * octave 2 + octave 3
-    Grid<int> mesa_noise{kMapW, kMapH, 0};    // picks the terraced regions...
+    std::array<int, 3> octave_weight{};
+    Grid<int> height_sum{kMapW, kMapH, 0};    // the weighted sum of every height octave
+    Grid<int> mesa_noise{kMapW, kMapH, 0};    // picks the terraced regions (0..255)...
     Grid<std::uint8_t> mesa{kMapW, kMapH, 0}; // ...which are these cells (1 = terraced)
-    Grid<int> rough{kMapW, kMapH, 0};         // formation roughness (edges and tops)
-    Grid<int> material{kMapW, kMapH, 0};      // material noise
+    Grid<int> mesa_blend{kMapW, kMapH, 0};    // how terraced each cell is, 0..256 (the feather)
+    Grid<int> rough{kMapW, kMapH, 0};         // formation roughness (edges and tops), 0..255
+    Grid<int> material{kMapW, kMapH, 0};      // material noise, 0..255
 };
 
 // The map generator (design/world.md, How a map is made). From the seed alone it makes the
