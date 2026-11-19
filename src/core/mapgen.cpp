@@ -15,7 +15,7 @@
 namespace pixeltd {
 namespace {
 
-using gen::add_value_noise;
+using gen::fill_noise;
 using gen::kDirs;
 using gen::rand_range;
 using Mask = Grid<std::uint8_t>;
@@ -53,37 +53,65 @@ template <class T> void shuffle(std::vector<T>& v, Rng& rng) {
     }
 }
 
-// Rolling height from three octaves of noise, stretched to 0..ground_max, with mesa regions
-// terraced into flat steps (their edges become cliff faces).
-void make_height(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
-    // Each octave in its own grid, then the weighted sum: the same draws and integer maths as
-    // adding them into one field with weights 4, 2 and 1.
-    add_value_noise(out.octave[0], rng, p.height_step, 1);
-    add_value_noise(out.octave[1], rng, std::max(2, p.height_step / 2), 1);
-    add_value_noise(out.octave[2], rng, std::max(2, p.height_step / 4), 1);
-    Grid<int>& field = out.height_sum;
-    for (int y = 0; y < kMapH; ++y) {
-        for (int x = 0; x < kMapW; ++x) {
-            field.at(x, y) =
-                4 * out.octave[0].at(x, y) + 2 * out.octave[1].at(x, y) + out.octave[2].at(x, y);
+// Turns a raw fill_noise sum into the layer's 0..255 value (exact for one octave).
+void normalize(Grid<int>& field, int total_weight) {
+    const int total = std::max(1, total_weight);
+    for (int y = 0; y < field.height(); ++y) {
+        for (int x = 0; x < field.width(); ++x) {
+            field.at(x, y) /= total;
         }
     }
+}
+
+// Rolling height from the height noise, stretched to 0..ground_max, with mesa regions terraced
+// into steps (their edges become cliff faces). Terracing fades in over mesa_feather_cells from a
+// mesa region's edge, and each table keeps mesa_relief of the slope under it.
+void make_height(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
+    Grid<int>& field = out.height_sum;
+    fill_noise(field, rng, p.height, &out.octave, &out.octave_weight);
     const auto [lo_it, hi_it] = std::minmax_element(field.cells().begin(), field.cells().end());
     const int lo = *lo_it;
     const int span = std::max(1, *hi_it - lo);
 
-    add_value_noise(out.mesa_noise, rng, p.mesa_noise_step, 1);
+    const int mesa_weight = fill_noise(out.mesa_noise, rng, p.mesa_noise);
+    normalize(out.mesa_noise, mesa_weight);
     out.mesa = top_cells(out.mesa_noise, 255, kCellCount * p.mesa_share_pct / 100);
     const Mask& mesa = out.mesa;
 
-    const int band = std::max(1, p.mesa_band);
+    // The feather: each mesa cell's walking distance (4-neighbour steps) from the nearest cell
+    // outside the mesa regions; terracing reaches full strength mesa_feather_cells in.
+    Grid<int> dist(kMapW, kMapH, -1);
+    std::vector<Cell> outside;
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
-            int h = (field.at(x, y) - lo) * p.ground_max / span;
-            if (mesa.at(x, y) != 0) {
-                h = std::min(p.ground_max, h / band * band + band / 2);
+            if (mesa.at(x, y) == 0) {
+                outside.push_back({x, y});
             }
-            map.height.at(x, y) = static_cast<std::uint8_t>(h);
+        }
+    }
+    gen::bfs(dist, outside, [&](Cell c) { return mesa.at(c) != 0; });
+    const int feather = p.mesa_feather_cells;
+
+    const int band = std::max(1, p.mesa_band);
+    const int relief = std::clamp(p.mesa_relief, 0, band);
+    for (int y = 0; y < kMapH; ++y) {
+        for (int x = 0; x < kMapW; ++x) {
+            const int smooth =
+                static_cast<int>(static_cast<long long>(field.at(x, y) - lo) * p.ground_max / span);
+            int h = smooth;
+            int blend = 0;
+            if (mesa.at(x, y) != 0) {
+                // A whole-map mesa has no outside cells to measure from: fully terraced.
+                const int d = dist.at(x, y) < 0 ? feather : dist.at(x, y);
+                blend = feather <= 0 ? 256 : std::min(d, feather) * 256 / feather;
+                // The table: its level, centred in the band, plus a compressed copy of the slope.
+                const int level = smooth / band * band;
+                const int terraced = std::min(p.ground_max, level + (band - relief) / 2 +
+                                                                smooth % band * relief / band);
+                h = smooth + (terraced - smooth) * blend / 256;
+            }
+            out.mesa_blend.at(x, y) = blend;
+            map.height.at(x, y) = static_cast<std::uint8_t>(std::clamp(h, 0, p.ground_max));
         }
     }
 }
@@ -91,7 +119,7 @@ void make_height(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
 // Rock formations: blobs with noise-shaped edges, standing at formation_height_min..255.
 void place_formations(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
     Grid<int>& rough = out.rough;
-    add_value_noise(rough, rng, 6, 1); // 0..255, shapes the edges and the tops
+    normalize(rough, fill_noise(rough, rng, p.formation_rough)); // 0..255
     const int count = rand_range(rng, p.formations_min, p.formations_max);
     for (int k = 0; k < count; ++k) {
         const int cx = rand_range(rng, 0, kMapW - 1);
@@ -100,7 +128,9 @@ void place_formations(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
         for (int y = std::max(0, cy - 2 * r); y <= std::min(kMapH - 1, cy + 2 * r); ++y) {
             for (int x = std::max(0, cx - 2 * r); x <= std::min(kMapW - 1, cx + 2 * r); ++x) {
                 const int n = rough.at(x, y);
-                const int scale = 45 + n * 110 / 255; // 45%..155% of r^2
+                // The roughness scales r^2 between the two percentages.
+                const int scale = p.formation_scale_min_pct +
+                                  n * (p.formation_scale_max_pct - p.formation_scale_min_pct) / 255;
                 const int dx = x - cx;
                 const int dy = y - cy;
                 if ((dx * dx + dy * dy) * 100 <= r * r * scale) {
@@ -115,10 +145,11 @@ void place_formations(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
 
 void paint_materials(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
     Grid<int>& field = out.material;
-    add_value_noise(field, rng, p.material_noise_step, 1);
+    normalize(field, fill_noise(field, rng, p.material_noise)); // 0..255
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
-            map.material.at(x, y) = static_cast<Material>(field.at(x, y) * kMaterials / 256);
+            map.material.at(x, y) =
+                static_cast<Material>(std::clamp(field.at(x, y), 0, 255) * kMaterials / 256);
         }
     }
 }
@@ -291,7 +322,9 @@ Map make_fallback_map(std::uint64_t seed, const GenParams& p) {
     return map;
 }
 
-Map generate_map(std::uint64_t seed, const GenParams& p, GenLayers* layers) {
+Map generate_map(std::uint64_t seed, const GenParams& params, GenLayers* layers) {
+    GenParams p = params; // clamped to safe ranges: a tuning panel or a preset can't break it
+    validate(p);
     for (int attempt = 0; attempt < p.attempts; ++attempt) {
         Rng rng(splitmix64(seed), kStreamTerrain + static_cast<std::uint64_t>(attempt));
         Map map;

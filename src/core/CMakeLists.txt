@@ -4,8 +4,10 @@ add_library(pixeltd_core STATIC
   fog.cpp
   fixed_step.cpp
   los.cpp
+  gen_params.cpp
   mapgen.cpp
   overlay.cpp
+  preset.cpp
   terrain.cpp)
 target_include_directories(pixeltd_core PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_compile_features(pixeltd_core PUBLIC cxx_std_20)

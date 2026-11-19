@@ -53,8 +53,20 @@ Every cell has:
 
 - **Brightness shows height** (brighter is higher), and **hue shows the material**.
 - **Hills, valleys and mesas.** The generator layers smooth noise for rolling terrain and
-  terraces some regions into mesas: flat steps every **20 height units (start)**, each edge a
-  sheer side (a cliff, since 20 is over the cliff step).
+  terraces some regions into mesas: steps every **20 height units (start)**, each edge a sheer side
+  (a cliff, since 20 is over the cliff step).
+  - **Feathered:** terracing fades in over **8 cells (start)** from a mesa region's edge, so mesas
+    blend into the rolling terrain instead of starting abruptly.
+  - **Gentle tables:** each table keeps a compressed copy of the slope under it, up to **6 height
+    units (start)**, the flat limit, so tables stay buildable. The step between tables is then
+    20 − 6 = 14, still a cliff.
+- **Noise layers (start values, tunable).** Height, the mesa mask, formation roughness and
+  materials each come from a noise layer with the same controls: the octave count, the first
+  octave's feature size, lacunarity (how much smaller each next octave is) and persistence (how much
+  weaker), the interpolation curve (linear, smoothstep, quintic), domain warp (strength and size)
+  and the shape (normal, ridged, billowed). The defaults: height 3 octaves from 64 cells (weights
+  4 : 2 : 1), the others 1 octave; smoothstep, normal, no warp. Settings can be saved as presets
+  (settings only, no seed).
 - **Cliff faces.** A step between neighbouring cells greater than **12 height units (start)** is a
   cliff.
   - Enemies can't cross a cliff, in either direction.

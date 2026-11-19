@@ -72,9 +72,11 @@ TEST_CASE("the layers are the noise the map was made from") {
                 for (const auto& o : L.octave) {
                     sums_ok = sums_ok && o.at(x, y) >= 0 && o.at(x, y) <= 255;
                 }
-                sums_ok = sums_ok && L.height_sum.at(x, y) == 4 * L.octave[0].at(x, y) +
-                                                                  2 * L.octave[1].at(x, y) +
-                                                                  L.octave[2].at(x, y);
+                // The default height noise has 3 octaves (weights 4 : 2 : 1).
+                sums_ok = sums_ok &&
+                          L.height_sum.at(x, y) == L.octave_weight[0] * L.octave[0].at(x, y) +
+                                                       L.octave_weight[1] * L.octave[1].at(x, y) +
+                                                       L.octave_weight[2] * L.octave[2].at(x, y);
                 materials_ok = materials_ok && static_cast<int>(m.material.at(x, y)) ==
                                                    L.material.at(x, y) * kMaterials / 256;
                 mesa_cells += L.mesa.at(x, y);
@@ -86,10 +88,18 @@ TEST_CASE("the layers are the noise the map was made from") {
                                             L.rough.at(x, y) * (255 - p.formation_height_min) / 255;
                     continue;
                 }
-                // Ground heights: the stretched sum, terraced exactly where the mesa mask is set.
-                int h = (L.height_sum.at(x, y) - lo) * p.ground_max / span;
+                // Ground heights: the stretched sum, blended towards the terraced table (level,
+                // centred, plus a compressed copy of the slope) by the feather.
+                const int smooth = static_cast<int>(
+                    static_cast<long long>(L.height_sum.at(x, y) - lo) * p.ground_max / span);
+                int h = smooth;
                 if (L.mesa.at(x, y) != 0) {
-                    h = std::min(p.ground_max, h / band * band + band / 2);
+                    const int terraced =
+                        std::min(p.ground_max, smooth / band * band + (band - p.mesa_relief) / 2 +
+                                                   smooth % band * p.mesa_relief / band);
+                    h = smooth + (terraced - smooth) * L.mesa_blend.at(x, y) / 256;
+                } else {
+                    heights_ok = heights_ok && L.mesa_blend.at(x, y) == 0;
                 }
                 heights_ok = heights_ok && m.height.at(x, y) == h;
             }
