@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 #include "core/gen_util.hpp"
@@ -54,18 +55,26 @@ template <class T> void shuffle(std::vector<T>& v, Rng& rng) {
 
 // Rolling height from three octaves of noise, stretched to 0..ground_max, with mesa regions
 // terraced into flat steps (their edges become cliff faces).
-void make_height(Map& map, Rng& rng, const GenParams& p) {
-    Grid<int> field(kMapW, kMapH, 0);
-    add_value_noise(field, rng, p.height_step, 4);
-    add_value_noise(field, rng, std::max(2, p.height_step / 2), 2);
-    add_value_noise(field, rng, std::max(2, p.height_step / 4), 1);
+void make_height(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
+    // Each octave in its own grid, then the weighted sum: the same draws and integer maths as
+    // adding them into one field with weights 4, 2 and 1.
+    add_value_noise(out.octave[0], rng, p.height_step, 1);
+    add_value_noise(out.octave[1], rng, std::max(2, p.height_step / 2), 1);
+    add_value_noise(out.octave[2], rng, std::max(2, p.height_step / 4), 1);
+    Grid<int>& field = out.height_sum;
+    for (int y = 0; y < kMapH; ++y) {
+        for (int x = 0; x < kMapW; ++x) {
+            field.at(x, y) =
+                4 * out.octave[0].at(x, y) + 2 * out.octave[1].at(x, y) + out.octave[2].at(x, y);
+        }
+    }
     const auto [lo_it, hi_it] = std::minmax_element(field.cells().begin(), field.cells().end());
     const int lo = *lo_it;
     const int span = std::max(1, *hi_it - lo);
 
-    Grid<int> mesa_noise(kMapW, kMapH, 0);
-    add_value_noise(mesa_noise, rng, p.mesa_noise_step, 1);
-    const Mask mesa = top_cells(mesa_noise, 255, kCellCount * p.mesa_share_pct / 100);
+    add_value_noise(out.mesa_noise, rng, p.mesa_noise_step, 1);
+    out.mesa = top_cells(out.mesa_noise, 255, kCellCount * p.mesa_share_pct / 100);
+    const Mask& mesa = out.mesa;
 
     const int band = std::max(1, p.mesa_band);
     for (int y = 0; y < kMapH; ++y) {
@@ -80,8 +89,8 @@ void make_height(Map& map, Rng& rng, const GenParams& p) {
 }
 
 // Rock formations: blobs with noise-shaped edges, standing at formation_height_min..255.
-void place_formations(Map& map, Rng& rng, const GenParams& p) {
-    Grid<int> rough(kMapW, kMapH, 0);
+void place_formations(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
+    Grid<int>& rough = out.rough;
     add_value_noise(rough, rng, 6, 1); // 0..255, shapes the edges and the tops
     const int count = rand_range(rng, p.formations_min, p.formations_max);
     for (int k = 0; k < count; ++k) {
@@ -104,8 +113,8 @@ void place_formations(Map& map, Rng& rng, const GenParams& p) {
     }
 }
 
-void paint_materials(Map& map, Rng& rng, const GenParams& p) {
-    Grid<int> field(kMapW, kMapH, 0);
+void paint_materials(Map& map, Rng& rng, const GenParams& p, GenLayers& out) {
+    Grid<int>& field = out.material;
     add_value_noise(field, rng, p.material_noise_step, 1);
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
@@ -234,15 +243,16 @@ Map make_fallback_map(std::uint64_t seed, const GenParams& p) {
     return map;
 }
 
-Map generate_map(std::uint64_t seed, const GenParams& p) {
+Map generate_map(std::uint64_t seed, const GenParams& p, GenLayers* layers) {
     for (int attempt = 0; attempt < p.attempts; ++attempt) {
         Rng rng(splitmix64(seed), kStreamTerrain + static_cast<std::uint64_t>(attempt));
         Map map;
         map.seed = seed;
         map.core_area = p.core_area;
-        make_height(map, rng, p);
-        place_formations(map, rng, p);
-        paint_materials(map, rng, p);
+        GenLayers noise;
+        make_height(map, rng, p, noise);
+        place_formations(map, rng, p, noise);
+        paint_materials(map, rng, p, noise);
         if (!shares_ok(map, p)) {
             continue;
         }
@@ -262,6 +272,10 @@ Map generate_map(std::uint64_t seed, const GenParams& p) {
             map.core = spots[t];
             if (place_spawns(map, walk_distance_to_core(map, p), rng, p)) {
                 map.stats.attempts = attempt + 1;
+                if (layers != nullptr) {
+                    noise.valid = true;
+                    *layers = std::move(noise);
+                }
                 return map;
             }
         }
@@ -269,6 +283,9 @@ Map generate_map(std::uint64_t seed, const GenParams& p) {
     Map fallback = make_fallback_map(seed, p);
     fallback.stats.attempts = p.attempts;
     fallback.stats.fallback = true;
+    if (layers != nullptr) {
+        *layers = GenLayers{};
+    }
     return fallback;
 }
 

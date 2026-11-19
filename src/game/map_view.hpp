@@ -12,6 +12,8 @@
 #include "core/gen_params.hpp"
 #include "core/grid.hpp"
 #include "core/map.hpp"
+#include "core/mapgen.hpp"
+#include "core/overlay.hpp"
 
 namespace pixeltd::game {
 
@@ -27,8 +29,14 @@ class MapView {
     MapView(const MapView&) = delete;
     MapView& operator=(const MapView&) = delete;
 
-    // Bakes the whole map. False if the texture couldn't be created or updated.
-    bool set_map(const Map& map, const Fog& fog);
+    // Bakes the whole map in the current overlay. False if the texture couldn't be created or
+    // updated.
+    bool set_map(const Map& map, const GenLayers& layers, const Fog& fog);
+
+    // Switches the developer overlay (issue #13) and re-bakes: Off shows the terrain, Elevation
+    // colour bands with contours, the rest a noise layer in greyscale.
+    bool set_overlay(Overlay overlay, const Map& map, const GenLayers& layers, const Fog& fog);
+    [[nodiscard]] Overlay overlay() const noexcept { return overlay_; }
 
     // Re-bakes the cells in `cells` (after fog lifts there).
     bool update(const Map& map, const Fog& fog, const Rect& cells);
@@ -49,13 +57,16 @@ class MapView {
     [[nodiscard]] double bake_ms() const noexcept { return bake_ms_; }
 
   private:
+    void fill_cells(const Map& map, const GenLayers& layers);
     bool render(const Map& map, const Fog& fog, const Rect& cells);
 
     SDL_Renderer* renderer_;
     SDL_Texture* terrain_ = nullptr;
+    Overlay overlay_ = Overlay::Off;
     std::vector<std::uint8_t> pixels_;        // RGBA, reused for every map
-    std::vector<std::array<float, 3>> cell_;  // each cell's shaded colour
+    std::vector<std::array<float, 3>> cell_;  // each cell's colour (terrain or noise layer)
     std::vector<std::array<float, 3>> shown_; // ...with the haze applied
+    std::vector<float> haze_;                 // 1 where unexplored, else 0
     std::optional<Cell> core_;
     std::vector<Spawn> spawns_;
     double bake_ms_ = 0.0;

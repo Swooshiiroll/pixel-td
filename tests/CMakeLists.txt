@@ -6,6 +6,7 @@ add_executable(pixeltd_tests
   test_fog.cpp
   test_los.cpp
   test_mapgen.cpp
+  test_overlay.cpp
   test_rng.cpp)
 target_link_libraries(pixeltd_tests PRIVATE pixeltd_core doctest::doctest pixeltd_warnings)
 add_test(NAME core COMMAND pixeltd_tests)
