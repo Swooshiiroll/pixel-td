@@ -393,13 +393,23 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
     if (s.zoom.den == 1) {
         std::snprintf(zoom, sizeof zoom, "%dx", s.zoom.num);
     } else if (s.index == s.steps.count - 1) {
-        std::snprintf(zoom, sizeof zoom, "whole map (%.3fx)", static_cast<double>(s.k()));
+        std::snprintf(zoom, sizeof zoom, "whole %.3fx", static_cast<double>(s.k()));
     } else {
         std::snprintf(zoom, sizeof zoom, "%d/%d", s.zoom.num, s.zoom.den);
     }
-    std::snprintf(line, sizeof line, "seed %016llx  zoom %s  gen %.1fms  cell %d,%d %s%s%s",
-                  static_cast<unsigned long long>(m.seed), zoom, world.gen_ms, hover.x, hover.y,
-                  ground, fog_shown ? "" : "  [fog off]",
+    // The relative resolution: the world pixels on screen, and their share of the map.
+    char area[48];
+    const ViewSize shown = visible_area(s.view);
+    const int share = map_share_permille(s.view);
+    if (share >= 1000) {
+        std::snprintf(area, sizeof area, "%dx%d (100%%)", shown.w, shown.h);
+    } else {
+        std::snprintf(area, sizeof area, "%dx%d (%d.%d%%)", shown.w, shown.h, share / 10,
+                      share % 10);
+    }
+    std::snprintf(line, sizeof line, "seed %llx  zoom %s %s  gen %.1fms  cell %d,%d %s%s%s",
+                  static_cast<unsigned long long>(m.seed), zoom, area, world.gen_ms, hover.x,
+                  hover.y, ground, fog_shown ? "" : "  [fog off]",
                   probe_mode ? "  [PROBE: click to place]" : "");
     const bool second = overlay != Overlay::Off;
     const SDL_FRect strip{0.0f, 0.0f, width, second ? 20.0f : 10.0f};

@@ -65,6 +65,13 @@ struct CameraPos {
 // partial pixel is cropped).
 [[nodiscard]] ViewSize view_size(int window_w, int window_h, Zoom zoom) noexcept;
 
+// The part of the map a view shows, in world pixels: the view clipped to the map (the whole-map
+// step can be wider or taller than the map, with bars).
+[[nodiscard]] ViewSize visible_area(ViewSize view) noexcept;
+
+// That area's share of the map, in tenths of a percent (0..1000).
+[[nodiscard]] int map_share_permille(ViewSize view) noexcept;
+
 // Keeps the view inside the map; centres it on any axis where the view is wider than the map.
 [[nodiscard]] CameraPos clamp_camera(CameraPos cam, ViewSize view) noexcept;
 

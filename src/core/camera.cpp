@@ -77,6 +77,17 @@ ZoomSteps zoom_steps(int window_w, int window_h) noexcept {
     return out;
 }
 
+ViewSize visible_area(ViewSize view) noexcept {
+    return {std::clamp(view.w, 0, kMapPxW), std::clamp(view.h, 0, kMapPxH)};
+}
+
+int map_share_permille(ViewSize view) noexcept {
+    const ViewSize a = visible_area(view);
+    const long long shown = static_cast<long long>(a.w) * a.h;
+    const long long map = static_cast<long long>(kMapPxW) * kMapPxH;
+    return static_cast<int>(shown * 1000 / map);
+}
+
 CameraPos clamp_camera(CameraPos cam, ViewSize view) noexcept {
     const auto axis = [](int pos, int view_len, int map_len) {
         if (view_len >= map_len) {

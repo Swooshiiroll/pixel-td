@@ -69,6 +69,16 @@ TEST_CASE("windows bigger than the map, small and odd windows") {
     CHECK(steps_are(0, 0, {{2, 1}, {1, 1}, {1, 2}, {1, 5120}}));
 }
 
+TEST_CASE("the HUD's relative resolution: the map area shown and its share") {
+    CHECK(visible_area({640, 360}) == ViewSize{640, 360});
+    CHECK(map_share_permille({640, 360}) == 15);    // 1/64 of the map: 1.5%
+    CHECK(map_share_permille({3840, 2160}) == 562); // the 1/2 step on 1080p: 56.2%
+    CHECK(map_share_permille({5120, 2880}) == 1000);
+    // The whole-map step on 1366 x 768 is 3 px wider than the map: clipped to it.
+    CHECK(visible_area({5123, 2880}) == ViewSize{5120, 2880});
+    CHECK(map_share_permille({5123, 2880}) == 1000);
+}
+
 TEST_CASE("only whole-number steps are pixel-perfect") {
     CHECK(pixel_perfect({3, 1}));
     CHECK_FALSE(pixel_perfect({1, 2}));
