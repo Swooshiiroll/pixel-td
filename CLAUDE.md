@@ -79,12 +79,17 @@ with the owner before writing any code.
 | Command | What it does |
 |---|---|
 | `setup` | First run on a fresh checkout (CI runs it too) |
-| `check` | Static checks and version consistency (CI check `check`) |
-| `test` | Unit tests (CI check `unit-tests`) |
+| `check` | Static checks, version consistency and a warnings-as-errors build (CI check `check`) |
+| `test` | Unit tests (CI runs them in the `check` job) |
 | `build` | Builds into `build/` (CI check `build`; uploaded as the test build) |
 | `version x.y.z` | Sets the version everywhere (`VERSION` is the source) |
 
 Logs go to `out/`.
+
+**CI** (`.github/workflows/ci.yml`): `check` builds only the core and the tests (no SDL) with GCC and
+warnings as errors, then runs the unit tests; `build-linux` and `build-windows` build the whole game,
+Linux also warnings-as-errors. Tools, apt packages and compiled objects (ccache, Linux) are cached
+between runs. `PIXELTD_CMAKE_ARGS` passes extra CMake arguments to `tools/dev.sh setup`.
 
 ## Rules
 
