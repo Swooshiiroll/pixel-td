@@ -360,7 +360,7 @@ void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, const GenPara
     const int tower = ground_at(map, centre);
     // Within the farthest possible reach: cells it reaches and sees get a light tint; the rest are
     // shaded, so the reach's real (non-circular) shape and blocked sight lines show.
-    const int reach = max_reach(base_px, tower, p);
+    const int reach = max_reach(base_px, p);
     const long long reach2 = static_cast<long long>(reach) * reach;
     for (int cy = (centre.y - reach) / kCellPx; cy <= (centre.y + reach) / kCellPx; ++cy) {
         for (int cx = (centre.x - reach) / kCellPx; cx <= (centre.x + reach) / kCellPx; ++cx) {
@@ -374,8 +374,8 @@ void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, const GenPara
             if (d2 > reach2) {
                 continue;
             }
-            const long long r = effective_range(base_px, tower, map.height.at(cx, cy), p);
-            const bool covered = d2 <= r * r && can_see(map, centre, c, p);
+            const bool covered = in_reach(base_px, tower, map.height.at(cx, cy), dx, dy, p) &&
+                                 can_see(map, centre, c, p);
             if (covered) {
                 SDL_SetRenderDrawColor(renderer_, 250, 220, 120, 40);
             } else {

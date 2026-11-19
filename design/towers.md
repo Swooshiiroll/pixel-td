@@ -126,7 +126,8 @@ the part it upgrades.
 
 - **World ([world.md](world.md)):**
   - footprints on the 8 px placement subgrid, on fairly flat ground across every 16 px cell they cover (no cliffs or rock formations);
-  - range grows with height above the target, and shrinks when shooting uphill;
+  - range follows the grade between tower and target: longer where the ground falls away, shorter
+    where it climbs (up to +-50%), the same on flat ground at any altitude;
   - direct fire needs a clear line over the terrain, while lobbed weapons arc over terrain;
   - rock formations block every shot;
   - towers explore fog within their reach, by direct sight. That includes lobbed towers, which

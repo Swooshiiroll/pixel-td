@@ -16,7 +16,7 @@ TEST_CASE("a preset round-trips every value exactly") {
     p.mesa_relief = 3;
     p.core_area = Rect{90, 50, 140, 80};
     p.spawn_waves = {1, 5, 15};
-    p.range_pct_per_10 = 7;
+    p.range_pct_per_grade = 7;
     REQUIRE(validate(p) == 0);
 
     const std::string text = to_preset(p);

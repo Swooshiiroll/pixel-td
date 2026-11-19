@@ -75,8 +75,8 @@ int validate(GenParams& p) noexcept {
     fit(p.light_range_px, 1, 2000, changed);
     fit(p.eye_height, 0, 255, changed);
     fit(p.target_height, 0, 255, changed);
-    fit(p.range_pct_per_10, 0, 100, changed);
-    fit(p.range_penalty_max_pct, 0, 99, changed);
+    fit(p.range_pct_per_grade, 0, 100, changed);
+    fit(p.range_slope_max_pct, 0, 99, changed);
     fit(p.attempts, 1, 256, changed);
     return changed;
 }

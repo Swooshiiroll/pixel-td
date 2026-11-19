@@ -89,11 +89,16 @@ Every cell has:
 - **Lobbed weapons** arc over terrain. Only rock formations block them.
 - **Sight is always direct**, even for lobbed weapons. A lobbed tower can hit what it can't see,
   but only once something else has explored it: artillery needs a spotter.
-- **Range grows with height above the target:**
-  - +5% per 10 height units the tower stands above the target **(start)**, with **no cap**: it keeps
-    growing with the drop (+20% at 40 units, +50% at 100, +100% at 200, the biggest drop possible);
-  - shooting uphill shortens it the same way, down to **-25% (start)**.
-  - So a tower's reach isn't a circle: it reaches further over low ground than up a hill.
+- **Range follows the grade, not the altitude** (#27). What counts is how the ground falls or rises
+  between a tower and its target, not how high the tower stands:
+  - the **grade** is the fall per cell: (tower's ground - target's ground) x 16 / distance in px
+    (a distance under one cell counts as one cell). It's positive downhill, negative uphill;
+  - the range changes by **10% per unit of grade (start)**, at most **+-50% (start)**: longer downhill,
+    shorter uphill, the same strength both ways;
+  - so flat ground at any altitude gives the base range (a circle). A drop-off ahead stretches the
+    reach and a climb ahead shrinks it, and on a slope the reach is an oval stretched downhill. For
+    example, a light tower (72 px) over ground that falls 10 units in 4 cells reaches 90 px
+    (+25%); 20 units in 4 cells, 108 px (+50%, the cap).
 - Whether a weapon fires directly or is lobbed is a trait of the weapon part
   ([towers.md](towers.md)).
 
@@ -286,7 +291,7 @@ All in `src/core`, headless, in doctest:
   - formations block direct, lobbed and sight;
   - lobbed shots clear a ridge;
   - the corner rule.
-- **Range:** the height bonus and penalty, including the cap and the floor.
+- **Range:** the grade rule both ways, flat ground at any altitude, and the caps.
 - **Fog:**
   - exploring around the core at start;
   - exploring by sight over terrain;

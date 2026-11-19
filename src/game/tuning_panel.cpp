@@ -239,6 +239,16 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
     if (ImGui::CollapsingHeader("Retries")) {
         slider("attempts", &params.attempts, 1, 256);
     }
+    // Not generation: these change what towers (and probes) reach and see, so the map stays as it
+    // is; fog and probes update on the next regenerate.
+    if (ImGui::CollapsingHeader("Towers, sight and range")) {
+        slider("light range (px)", &params.light_range_px, 8, 400);
+        slider("eye height", &params.eye_height, 0, 60);
+        slider("target height", &params.target_height, 0, 60);
+        slider("range % per grade", &params.range_pct_per_grade, 0, 100);
+        slider("range max +/- %", &params.range_slope_max_pct, 0, 99);
+        ImGui::TextDisabled("grade = fall per cell between tower and target");
+    }
 
     // --- Presets (settings only)
     ImGui::SeparatorText("Presets (settings only)");

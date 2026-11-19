@@ -87,12 +87,13 @@ struct GenParams {
     int spawn_spacing = 180;                   // cells between spawns, at least
 
     // --- Towers (until towers have their own data), sight and range (design/world.md).
-    int light_range_px = 72;        // a light tower's base range (4.5 cells)
-    int eye_height = 10;            // a tower sees and shoots from this far above its ground
-    int target_height = 4;          // ...at a point this far above the target's ground
-    int range_pct_per_10 = 5;       // range change per 10 height units above (or below) the target;
-                                    // shooting down, it keeps growing with the drop (no cap)
-    int range_penalty_max_pct = 25; // shooting up: at most this much shorter
+    int light_range_px = 72; // a light tower's base range (4.5 cells)
+    int eye_height = 10;     // a tower sees and shoots from this far above its ground
+    int target_height = 4;   // ...at a point this far above the target's ground
+    // Range by grade (#27): the fall (or rise) per cell between a tower and its target, not the
+    // tower's altitude, stretches (or shrinks) its reach.
+    int range_pct_per_grade = 10; // range change, %, per height unit of fall per cell
+    int range_slope_max_pct = 50; // at most this much longer downhill, or shorter uphill
 
     // --- Retries.
     int attempts = 64; // terrain attempts, then the known-safe fallback layout
