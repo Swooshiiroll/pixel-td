@@ -5,7 +5,7 @@
 // Camera).
 //
 //   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--zoom STEP] [--no-fog] [--window WxH]
-//           [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
+//           [--preset FILE] [--panel] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
 //                       subgrid; repeatable)
@@ -15,6 +15,8 @@
 //                       whole-number scale N
 //     --no-fog          developer tool: start with the fog hidden (F toggles it)
 //     --window WxH      developer tool: open the window at W x H (screenshots)
+//     --preset FILE     developer tool: generate with the settings in a preset file (#21)
+//     --panel           developer tool: open the map-tuning panel at start (Tab toggles it)
 //     --map-shot F      developer tool: save the whole 5120x2880 map to F (BMP), then exit. With
 //                       no probes everything is shown explored; with probes, the fog is shown.
 //     --frames N        quit after N frames (smoke tests)
@@ -23,7 +25,7 @@
 // Controls: pan with WASD / arrows / the window edges / right-drag; zoom with the mouse wheel or
 // + and -, out to the whole map; developer tools: P toggles probe placement and a left-click
 // places one (a light tower's sight and reach), O / Shift+O step through the overlays, F hides
-// and shows the fog, F5 makes a new random map; Esc quits.
+// and shows the fog, F5 makes a new random map, Tab opens the map-tuning panel; Esc quits.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -48,6 +50,13 @@
 #include "core/overlay.hpp"
 #include "core/terrain.hpp"
 #include "game/map_view.hpp"
+#include "game/tuning_panel.hpp"
+
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
+#include <imgui_impl_sdlrenderer3.h>
+
+#include <string>
 
 namespace {
 
@@ -75,6 +84,8 @@ struct Options {
     StartZoom zoom = StartZoom::Standard;
     int zoom_scale = 0;
     bool no_fog = false;
+    const char* preset = nullptr;
+    bool panel = false;
     int window_w = kStandardViewW * 2;
     int window_h = kStandardViewH * 2;
 };
@@ -142,6 +153,10 @@ bool parse_options(int argc, char** argv, Options& out) {
             }
         } else if (std::strcmp(argv[i], "--no-fog") == 0) {
             out.no_fog = true;
+        } else if (std::strcmp(argv[i], "--preset") == 0 && has_value) {
+            out.preset = argv[++i];
+        } else if (std::strcmp(argv[i], "--panel") == 0) {
+            out.panel = true;
         } else if (std::strcmp(argv[i], "--window") == 0 && has_value) {
             if (!parse_pair(argv[++i], 'x', out.window_w, out.window_h) || out.window_w < 1 ||
                 out.window_h < 1) {
@@ -151,8 +166,8 @@ bool parse_options(int argc, char** argv, Options& out) {
         } else {
             std::fprintf(stderr,
                          "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
-                         "[--zoom whole|half|N] [--no-fog] [--window WxH] [--map-shot file.bmp] "
-                         "[--frames N] [--screenshot file.bmp]\n");
+                         "[--zoom whole|half|N] [--no-fog] [--window WxH] [--preset FILE] "
+                         "[--panel] [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]\n");
             return false;
         }
     }
@@ -171,6 +186,7 @@ struct World {
     Fog fog;
     std::vector<SubCell> probes; // top-left subcells of placed probes (light-tower sized)
     double gen_ms = 0.0;
+    game::MapStats stats; // for the tuning panel
 
     [[nodiscard]] int probe_range_px() const noexcept { return params.light_range_px; }
 };
@@ -204,7 +220,9 @@ bool place_probe(World& world, MapView& view, SubCell top_left) {
     return true;
 }
 
-bool new_map(World& world, MapView& view, std::uint64_t seed) {
+// Generates the map for `seed` with the world's settings and bakes it. With `preview` (the tuning
+// panel while a slider is dragged) it shows the fast cell preview instead of the full bake.
+bool new_map(World& world, MapView& view, std::uint64_t seed, bool preview = false) {
     const Uint64 start = SDL_GetTicksNS();
     world.map = generate_map(seed, world.params, &world.layers);
     world.gen_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
@@ -212,7 +230,13 @@ bool new_map(World& world, MapView& view, std::uint64_t seed) {
     world.fog.reset();
     world.fog.explore_core(world.map, world.params.light_range_px);
     const Map& m = world.map;
+    if (preview) {
+        const bool ok = view.set_preview(m, world.layers, world.fog);
+        world.stats = game::measure(m, world.params, world.gen_ms, view.bake_ms());
+        return ok;
+    }
     const bool ok = view.set_map(m, world.layers, world.fog);
+    world.stats = game::measure(m, world.params, world.gen_ms, view.bake_ms());
     SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
             "subcell %d,%d; %zu spawns",
             static_cast<unsigned long long>(seed), world.gen_ms, m.stats.attempts,
@@ -428,8 +452,9 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
 
 // Developer tool: renders the whole map once into a 5120x2880 target and saves it.
 int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const std::vector<SubCell>& probes,
-                 Overlay overlay, bool no_fog, const char* path) {
+                 Overlay overlay, bool no_fog, const GenParams& params, const char* path) {
     World world;
+    world.params = params;
     MapView view(r);
     view.set_overlay(overlay, world.map, world.layers, world.fog); // applied by the first bake
     view.set_fog_shown(!no_fog);
@@ -498,20 +523,47 @@ int main(int argc, char** argv) {
             SDL_VERSIONNUM_MICRO(SDL_GetVersion()), backend);
 
     const std::uint64_t first_seed = opts.has_seed ? opts.seed : random_seed();
+    GenParams start_params;
+    if (opts.preset != nullptr) {
+        std::string errors;
+        if (!game::load_preset_file(opts.preset, start_params, errors)) {
+            SDL_Log("preset %s: %s", opts.preset, errors.c_str());
+        }
+    }
     if (opts.map_shot != nullptr) {
         const int code = run_map_shot(renderer, first_seed, opts.probes, opts.overlay, opts.no_fog,
-                                      opts.map_shot);
+                                      start_params, opts.map_shot);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return code;
     }
 
+    // Dear ImGui for the map-tuning panel (#23): drawn at window resolution over the game.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr; // no imgui.ini next to the game
+    ImGui::StyleColorsDark();
+    {
+        int out_w = 0;
+        int out_h = 0;
+        SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
+        const float ui = std::max(1.0f, static_cast<float>(out_h) / 720.0f);
+        ImGui::GetStyle().ScaleAllSizes(ui);
+        ImGui::GetStyle().FontScaleDpi = ui;
+    }
+    ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
+    ImGui_ImplSDLRenderer3_Init(renderer);
+
     int exit_code = 0;
     {
         World world;
+        world.params = start_params;
         MapView view(renderer);
         Screen screen;
+        const char* base = SDL_GetBasePath();
+        game::TuningPanel panel(std::string(base != nullptr ? base : "") + "presets/");
+        panel.set_open(opts.panel);
         view.set_overlay(opts.overlay, world.map, world.layers, world.fog); // before the bake
         view.set_fog_shown(!opts.no_fog);
         if (!new_map(world, view, first_seed) || !refresh_screen(renderer, screen)) {
@@ -544,6 +596,21 @@ int main(int argc, char** argv) {
             const float density = SDL_GetWindowPixelDensity(window);
             SDL_Event e;
             while (SDL_PollEvent(&e)) {
+                ImGui_ImplSDL3_ProcessEvent(&e);
+                // While the panel is using the mouse or keyboard, the game doesn't see them.
+                const ImGuiIO& io = ImGui::GetIO();
+                const bool mouse_event =
+                    e.type == SDL_EVENT_MOUSE_WHEEL || e.type == SDL_EVENT_MOUSE_MOTION ||
+                    e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP;
+                if (panel.open() && ((mouse_event && io.WantCaptureMouse) ||
+                                     (e.type == SDL_EVENT_KEY_DOWN && io.WantCaptureKeyboard &&
+                                      e.key.key != SDLK_ESCAPE))) {
+                    continue;
+                }
+                if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_TAB) {
+                    panel.toggle();
+                    continue;
+                }
                 switch (e.type) {
                 case SDL_EVENT_QUIT:
                     running = false;
@@ -623,8 +690,11 @@ int main(int argc, char** argv) {
             int win_w = 0;
             int win_h = 0;
             SDL_GetWindowSize(window, &win_w, &win_h);
+            const ImGuiIO& ui_io = ImGui::GetIO();
+            const bool ui_mouse = panel.open() && ui_io.WantCaptureMouse;
+            const bool ui_keys = panel.open() && ui_io.WantCaptureKeyboard;
             const bool focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0 &&
-                                 SDL_GetMouseFocus() == window;
+                                 SDL_GetMouseFocus() == window && !ui_mouse;
 
             const Uint64 now = SDL_GetTicksNS();
             const int ticks = step.advance(static_cast<std::int64_t>(now - last));
@@ -635,16 +705,18 @@ int main(int argc, char** argv) {
             for (int i = 0; i < ticks; ++i) {
                 int dx = 0;
                 int dy = 0;
-                if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) {
+                if (ui_keys) {
+                    // Typing in the panel: no keyboard panning.
+                } else if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) {
                     dx -= pan;
                 }
-                if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) {
+                if (!ui_keys && (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT])) {
                     dx += pan;
                 }
-                if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) {
+                if (!ui_keys && (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP])) {
                     dy -= pan;
                 }
-                if (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) {
+                if (!ui_keys && (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN])) {
                     dy += pan;
                 }
                 if (focused) {
@@ -672,6 +744,27 @@ int main(int argc, char** argv) {
             probe_at =
                 SubCell{(wx - half + kSubPx / 2) / kSubPx, (wy - half + kSubPx / 2) / kSubPx};
 
+            // The tuning panel: a frame of UI, then regenerate if it changed something.
+            ImGui_ImplSDLRenderer3_NewFrame();
+            ImGui_ImplSDL3_NewFrame();
+            ImGui::NewFrame();
+            {
+                std::uint64_t seed = world.map.seed;
+                const float top =
+                    10.0f * static_cast<float>(pixel_perfect(screen.zoom)
+                                                   ? screen.zoom.num
+                                                   : std::max(1, screen.out_h / kStandardViewH));
+                const auto change = panel.draw(world.params, seed, world.stats, top * 2.0f);
+                if (change != game::TuningPanel::Change::None) {
+                    const bool preview = change == game::TuningPanel::Change::Preview;
+                    if (!new_map(world, view, seed, preview)) {
+                        exit_code = 1;
+                        running = false;
+                    }
+                }
+            }
+            ImGui::Render();
+
             // Whole-number steps: draw 1:1 into the view target. Fractional: shrunk into the
             // window-sized target.
             const bool crisp = pixel_perfect(screen.zoom);
@@ -697,7 +790,8 @@ int main(int argc, char** argv) {
 
             ++frame;
             const bool last_frame = opts.frames > 0 && frame >= opts.frames;
-            if (last_frame && opts.screenshot != nullptr &&
+            // With the panel open, the screenshot is taken from the window below (with the panel).
+            if (last_frame && opts.screenshot != nullptr && !panel.open() &&
                 !save_target(renderer, opts.screenshot)) {
                 exit_code = 1;
             }
@@ -711,6 +805,11 @@ int main(int argc, char** argv) {
                       : SDL_FRect{0.0f, 0.0f, static_cast<float>(screen.target_w),
                                   static_cast<float>(screen.target_h)};
             SDL_RenderTexture(renderer, screen.target, nullptr, &dst);
+            ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
+            if (last_frame && opts.screenshot != nullptr && panel.open() &&
+                !save_target(renderer, opts.screenshot)) {
+                exit_code = 1;
+            }
             SDL_RenderPresent(renderer);
 
             if (last_frame) {
@@ -722,6 +821,9 @@ int main(int argc, char** argv) {
         }
     }
 
+    ImGui_ImplSDLRenderer3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

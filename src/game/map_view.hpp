@@ -59,6 +59,11 @@ class MapView {
     // Refreshes the fog layer for the cells in `cells` (after fog lifts there).
     bool update_fog(const Fog& fog, const Rect& cells);
 
+    // The tuning panel's fast preview (#23): the map's 320 x 180 cell colours, drawn stretched,
+    // stand in for the full bake until the next set_map or set_overlay.
+    bool set_preview(const Map& map, const GenLayers& layers, const Fog& fog);
+    [[nodiscard]] bool previewing() const noexcept { return previewing_; }
+
     // Developer toggle (F): with the fog hidden, there's no haze and every spawn shows. Exploring
     // carries on underneath.
     void set_fog_shown(bool shown) noexcept { fog_shown_ = shown; }
@@ -90,6 +95,9 @@ class MapView {
     SDL_Renderer* renderer_;
     std::array<SDL_Texture*, kTerrainLevels> terrain_{};
     SDL_Texture* fog_ = nullptr;
+    SDL_Texture* preview_ = nullptr;
+    std::vector<std::uint8_t> preview_px_;
+    bool previewing_ = false;
     Overlay overlay_ = Overlay::Off;
     bool fog_shown_ = true;
     std::vector<std::uint8_t> pixels_;       // RGBA at 1x, reused for every map

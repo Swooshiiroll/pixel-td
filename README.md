@@ -32,7 +32,8 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - P toggles probe placement (a left-click places a probe that shows a light tower's reach and
     sight, and lifts the fog);
   - O and Shift+O step through the overlays (elevation, and the generator's noise layers);
-  - F hides and shows the fog.
+  - F hides and shows the fog;
+  - Tab opens the map-tuning panel (seed, every generator and noise setting, live stats, presets).
 - **Developer flags:**
   - `--seed N` uses seed N (decimal, or hex with `0x`).
   - `--map-shot f.bmp` saves the whole 5120x2880 map and exits (fully explored, unless probes are given).
@@ -40,6 +41,7 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - `--zoom whole|half|N` starts at the whole map, the 1/2 step or the whole-number scale N.
   - `--no-fog` starts with the fog hidden.
   - `--window WxH` opens the window at that size (for screenshots).
+  - `--preset FILE` generates with the settings in a preset file; `--panel` opens the tuning panel at start.
   - `--overlay NAME` starts in an overlay: `elevation`, `octave1`, `octave2`, `octave3`, `height`, `mesa`, `rough` or `material`.
   - `--frames N --screenshot f.bmp` renders N frames, saves the last frame and exits.
 

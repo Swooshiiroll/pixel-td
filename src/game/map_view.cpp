@@ -87,6 +87,9 @@ MapView::~MapView() {
     if (fog_ != nullptr) {
         SDL_DestroyTexture(fog_);
     }
+    if (preview_ != nullptr) {
+        SDL_DestroyTexture(preview_);
+    }
 }
 
 bool MapView::create_textures() {
@@ -119,10 +122,54 @@ bool MapView::set_map(const Map& map, const GenLayers& layers, const Fog& fog) {
     }
     core_ = map.core;
     spawns_ = map.spawns;
+    previewing_ = false;
     fill_cells(map, layers);
     const bool ok = render(map) && update_fog(fog, Rect{0, 0, kMapW, kMapH});
     bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
     return ok;
+}
+
+bool MapView::set_preview(const Map& map, const GenLayers& layers, const Fog& fog) {
+    if (terrain_[0] == nullptr && !create_textures()) {
+        return false;
+    }
+    if (preview_ == nullptr) {
+        preview_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
+                                     kMapW, kMapH);
+        if (preview_ == nullptr) {
+            SDL_Log("preview texture failed: %s", SDL_GetError());
+            return false;
+        }
+        SDL_SetTextureScaleMode(preview_, SDL_SCALEMODE_LINEAR);
+        preview_px_.assign(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH) * 4u,
+                           0);
+    }
+    core_ = map.core;
+    spawns_ = map.spawns;
+    fill_cells(map, layers);
+    for (int y = 0; y < kMapH; ++y) {
+        for (int x = 0; x < kMapW; ++x) {
+            const std::size_t i = cell_index(x, y);
+            std::uint8_t* out = preview_px_.data() + i * 4u;
+            if (overlay_ == Overlay::Elevation) {
+                const Rgb8 c = elevation_colour(map.height.at(x, y));
+                out[0] = c.r;
+                out[1] = c.g;
+                out[2] = c.b;
+            } else {
+                for (std::size_t ch = 0; ch < 3; ++ch) {
+                    out[ch] = static_cast<std::uint8_t>(std::clamp(cell_[i][ch], 0.0f, 255.0f));
+                }
+            }
+            out[3] = 255;
+        }
+    }
+    previewing_ = true;
+    const bool ok = SDL_UpdateTexture(preview_, nullptr, preview_px_.data(), kMapW * 4);
+    if (!ok) {
+        SDL_Log("preview upload failed: %s", SDL_GetError());
+    }
+    return update_fog(fog, Rect{0, 0, kMapW, kMapH}) && ok;
 }
 
 bool MapView::set_overlay(Overlay overlay, const Map& map, const GenLayers& layers,
@@ -134,6 +181,7 @@ bool MapView::set_overlay(Overlay overlay, const Map& map, const GenLayers& laye
     }
     const Uint64 start = SDL_GetTicksNS();
     overlay_ = overlay;
+    previewing_ = false;
     fill_cells(map, layers);
     const bool ok = render(map);
     bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
@@ -387,12 +435,19 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
 
     // Terrain: the deepest copy whose scale is still at least the zoom, so the GPU never shrinks
     // it by more than 2x (unless the window is tiny). Whole-number steps draw level 0 crisp.
-    const std::size_t level = xf.k > 0.5f ? 0 : xf.k > 0.25f ? 1 : 2;
-    const float f = static_cast<float>(1 << level);
-    SDL_Texture* terrain = terrain_[level];
-    SDL_SetTextureScaleMode(terrain, xf.smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
-    const SDL_FRect src{sx / f, sy / f, sw / f, sh / f};
-    SDL_RenderTexture(renderer_, terrain, &src, &dst);
+    // While the tuning panel previews a change, the 320 x 180 cell preview stands in for it.
+    if (previewing_ && preview_ != nullptr) {
+        const auto c = static_cast<float>(kCellPx);
+        const SDL_FRect psrc{sx / c, sy / c, sw / c, sh / c};
+        SDL_RenderTexture(renderer_, preview_, &psrc, &dst);
+    } else {
+        const std::size_t level = xf.k > 0.5f ? 0 : xf.k > 0.25f ? 1 : 2;
+        const float f = static_cast<float>(1 << level);
+        SDL_Texture* terrain = terrain_[level];
+        SDL_SetTextureScaleMode(terrain, xf.smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+        const SDL_FRect src{sx / f, sy / f, sw / f, sh / f};
+        SDL_RenderTexture(renderer_, terrain, &src, &dst);
+    }
 
     // Fog: one texel per cell, stretched with linear filtering.
     if (fog_shown_ && core_) {

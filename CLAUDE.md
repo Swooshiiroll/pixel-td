@@ -134,8 +134,9 @@ runs the unit tests only when the push changes a system or object (`tools/ci-sco
     update the hashes in the same pull request and say why.
   - Every generator number lives in `GenParams` as a (start) value.
 - **Art is generated, not drawn by hand or downloaded:** sprites are original, authored by Claude.
-- **Dependencies are pinned** (SDL3 3.4.18 and doctest 2.5.3 by release URL + SHA256 in
-  `CMakeLists.txt`). Upgrade deliberately, in their own PR.
+- **Dependencies are pinned** (SDL3 3.4.18, doctest 2.5.3 and Dear ImGui 1.93.0 by release URL +
+  SHA256 in `CMakeLists.txt`). Upgrade deliberately, in their own PR. Dear ImGui is for developer
+  tools only (the map-tuning panel) and is linked into the game, never into `src/core`.
 - **clang-format is exactly 22.1.3** locally and on CI (`.clang-format`; `tools/dev.sh check`
   fails on any other version so formatting never flip-flops).
 - **The owner plays over RDP:** the renderer must keep working on D3D11/WARP or software; the game
