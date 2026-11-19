@@ -24,8 +24,9 @@ defaults:
 
 jobs:
   # Format, version, a warnings-as-errors build of the core and the tests (GCC), and the unit
-  # tests. Core only: the tests never touch SDL, so this job needs no SDL packages and doesn't
-  # compile SDL3. The game itself is built warnings-as-errors in build-linux.
+  # tests when a system or object changed (tools/ci-scope.sh). Core only: the tests never touch
+  # SDL, so this job needs no SDL packages and doesn't compile SDL3. The game itself is built
+  # warnings-as-errors in build-linux.
   check:
     name: check
     runs-on: ubuntu-latest
@@ -37,6 +38,16 @@ jobs:
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tools/ci-scope.sh compares with the previous push and with main
+      - name: Test scope (full unit tests only when a system or object changed)
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scope=$(tools/ci-scope.sh "${{ github.event.before }}")
+          echo "unit tests: $scope"
+          echo "tests=$scope" >> "$GITHUB_OUTPUT"
       - name: Ninja (the runner image normally has it already)
         run: command -v ninja || { sudo apt-get update -q && sudo apt-get install -y -q ninja-build; }
       - name: clang-format cache
@@ -63,7 +74,11 @@ jobs:
       - name: Static checks
         run: tools/dev.sh check
       - name: Unit tests
+        if: steps.scope.outputs.tests == 'full'
         run: tools/dev.sh test
+      - name: Unit tests skipped
+        if: steps.scope.outputs.tests != 'full'
+        run: echo "::notice::Unit tests skipped: this push changes no system or object (src/core, tests, CMake, CI or tools)."
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4

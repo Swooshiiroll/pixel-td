@@ -58,8 +58,11 @@ with the owner before writing any code.
      (`gh project item-edit`, or drag it on the board).
 2. **Branch:** `feat/<issue>-slug`, `fix/…`, `perf/…`, `design/…`, `docs/…` or `chore/…`.
 3. **Work in small commits.**
-   - **Unit tests:** every behaviour change adds or updates unit tests.
-   - **Before pushing:** run `tools/dev.sh check` and `tools/dev.sh test`.
+   - **Unit tests:** every behaviour change to a system or object adds or updates unit tests.
+   - **Before pushing:** always run `tools/dev.sh check`. Run the full `tools/dev.sh test` only when
+     implementing or changing a system or object (owner's rule): `src/core`, `tests`, CMake
+     files, CI or `tools`. Front-end tweaks (`src/game`: HUD, drawing, input), docs and design
+     files get `check` plus a screenshot instead. CI applies the same rule (`tools/ci-scope.sh`).
 4. **Open the pull request:** `gh pr create`, using the template.
    - Put `Closes #<issue>` in it.
    - Add a line to `CHANGELOG.md` under Unreleased.
@@ -89,7 +92,8 @@ Logs go to `out/`.
 **CI** (`.github/workflows/ci.yml`): `check` builds only the core and the tests (no SDL) with GCC and
 warnings as errors, then runs the unit tests; `build-linux` and `build-windows` build the whole game,
 Linux also warnings-as-errors. Tools, apt packages and compiled objects (ccache, Linux) are cached
-between runs. `PIXELTD_CMAKE_ARGS` passes extra CMake arguments to `tools/dev.sh setup`.
+between runs. `PIXELTD_CMAKE_ARGS` passes extra CMake arguments to `tools/dev.sh setup`. `check`
+runs the unit tests only when the push changes a system or object (`tools/ci-scope.sh`).
 
 ## Rules
 

@@ -12,4 +12,4 @@ them under its version (see CLAUDE.md, "Releasing").
 - Design docs for review: game overview, world layout and map generator, tower system (#3).
 
 ### Changed
-- Faster CI: the check and unit-test jobs are merged into one core-only job (no SDL), and tools, apt packages and compiled objects are cached between runs (#17).
+- Faster CI: the check and unit-test jobs are merged into one core-only job (no SDL), and tools, apt packages and compiled objects are cached between runs; the unit tests only run when a push changes a system or object (#17).
