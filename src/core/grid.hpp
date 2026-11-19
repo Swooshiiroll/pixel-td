@@ -6,19 +6,19 @@
 
 namespace pixeltd {
 
-// The world sits on a hidden grid of 16 px cells (design/world.md): 320 x 180 cells, 5120 x 2880
+// The world sits on a hidden grid of 16 px cells (design/world.md): 960 x 540 cells, 15360 x 8640
 // px. The terrain is drawn seamless; the cells are for terrain, line of sight and pathfinding.
 inline constexpr int kCellPx = 16;
-inline constexpr int kMapW = 320;
-inline constexpr int kMapH = 180;
+inline constexpr int kMapW = 960;
+inline constexpr int kMapH = 540;
 inline constexpr int kMapPxW = kMapW * kCellPx;
 inline constexpr int kMapPxH = kMapH * kCellPx;
 
 // Towers and the core snap to a placement subgrid of 8 px subcells, two per cell each way.
 inline constexpr int kSubPx = 8;
 inline constexpr int kSubPerCell = kCellPx / kSubPx;
-inline constexpr int kSubW = kMapW * kSubPerCell; // 640
-inline constexpr int kSubH = kMapH * kSubPerCell; // 360
+inline constexpr int kSubW = kMapW * kSubPerCell; // 1920
+inline constexpr int kSubH = kMapH * kSubPerCell; // 1080
 
 // Footprints, in subcells: light tower 24 px, heavy tower 48 px, core 72 px.
 inline constexpr int kLightSub = 3;

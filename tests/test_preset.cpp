@@ -61,7 +61,7 @@ TEST_CASE("bad presets are reported, and values are clamped") {
     CHECK(errors.find("line 4: expected key = value") != std::string::npos);
     CHECK(errors.find("line 5: bad value for 'spawn_waves'") != std::string::npos);
     CHECK(errors.find("clamped") != std::string::npos);
-    CHECK(p.height.step == 160);                           // clamped
+    CHECK(p.height.step == kMapW / 2);                     // clamped
     CHECK(p.height.octaves == GenParams{}.height.octaves); // unchanged after a bad value
     CHECK(p.spawn_waves == GenParams{}.spawn_waves);
 }

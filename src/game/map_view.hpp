@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/camera.hpp"
+#include "core/contours.hpp"
 #include "core/fog.hpp"
 #include "core/gen_params.hpp"
 #include "core/grid.hpp"
@@ -34,12 +35,13 @@ struct DrawXf {
     }
 };
 
-// Draws a generated map. The terrain is baked into a 5120x2880 texture, seamless: each cell gets
-// a colour (brightness from height, hill shading, muted material hue, formation shadows) and each
-// pixel blends the four nearest cell centres. Copies averaged down to 1/2 and 1/4 serve the
-// zoomed-out steps. The fog is its own 320x180 layer (one texel per cell, linear filtered), so
-// lifting it doesn't re-bake anything. The core, spawns and probes are drawn over it each frame.
-// Colours are placeholders until the style board settles the art.
+// Draws a generated map (issue #25). The terrain is one texture with a texel per cell (960 x 540,
+// about 2 MB at any map size): each cell gets a colour (brightness from height, hill shading, muted
+// material hue, formation shadows), and the GPU stretches it with linear filtering, so each pixel
+// blends the four nearest cell centres: seamless, with nothing baked at full size. The fog is a
+// second cell texture. The elevation overlay adds contour lines (core/contours). The core, spawns
+// and probes are drawn over it each frame. Colours are placeholders until the style board settles
+// the art.
 class MapView {
   public:
     explicit MapView(SDL_Renderer* renderer);
@@ -47,22 +49,17 @@ class MapView {
     MapView(const MapView&) = delete;
     MapView& operator=(const MapView&) = delete;
 
-    // Bakes the whole map in the current overlay, and the fog layer. False if a texture couldn't
-    // be created or updated.
+    // Colours the map's cells in the current overlay and uploads them, and the fog layer. A few
+    // milliseconds. False if a texture couldn't be created or updated.
     bool set_map(const Map& map, const GenLayers& layers, const Fog& fog);
 
-    // Switches the developer overlay (issue #13) and re-bakes: Off shows the terrain, Elevation
-    // colour bands with contours, the rest a noise layer in greyscale.
+    // Switches the developer overlay (issue #13) and recolours the cells: Off shows the terrain,
+    // Elevation colour bands with contours, the rest a noise layer in greyscale.
     bool set_overlay(Overlay overlay, const Map& map, const GenLayers& layers, const Fog& fog);
     [[nodiscard]] Overlay overlay() const noexcept { return overlay_; }
 
     // Refreshes the fog layer for the cells in `cells` (after fog lifts there).
     bool update_fog(const Fog& fog, const Rect& cells);
-
-    // The tuning panel's fast preview (#23): the map's 320 x 180 cell colours, drawn stretched,
-    // stand in for the full bake until the next set_map or set_overlay.
-    bool set_preview(const Map& map, const GenLayers& layers, const Fog& fog);
-    [[nodiscard]] bool previewing() const noexcept { return previewing_; }
 
     // Developer toggle (F): with the fog hidden, there's no haze and every spawn shows. Exploring
     // carries on underneath.
@@ -82,29 +79,23 @@ class MapView {
     // A placed probe.
     void draw_probe(const DrawXf& xf, SubCell top_left, SDL_Color colour) const;
 
-    // How long the last full bake took, in milliseconds.
+    // How long the last colouring and upload took, in milliseconds.
     [[nodiscard]] double bake_ms() const noexcept { return bake_ms_; }
 
   private:
-    static constexpr std::size_t kTerrainLevels = 3; // 1x, 1/2, 1/4
-
     bool create_textures();
     void fill_cells(const Map& map, const GenLayers& layers);
-    bool render(const Map& map);
+    bool upload_terrain();
 
     SDL_Renderer* renderer_;
-    std::array<SDL_Texture*, kTerrainLevels> terrain_{};
-    SDL_Texture* fog_ = nullptr;
-    SDL_Texture* preview_ = nullptr;
-    std::vector<std::uint8_t> preview_px_;
-    bool previewing_ = false;
+    SDL_Texture* terrain_ = nullptr; // one texel per cell
+    SDL_Texture* fog_ = nullptr;     // one texel per cell
     Overlay overlay_ = Overlay::Off;
     bool fog_shown_ = true;
-    std::vector<std::uint8_t> pixels_;       // RGBA at 1x, reused for every map
-    std::vector<std::uint8_t> half_;         // ...averaged down to 1/2
-    std::vector<std::uint8_t> quarter_;      // ...and 1/4
-    std::vector<std::array<float, 3>> cell_; // each cell's colour (terrain or noise layer)
+    std::vector<std::array<float, 3>> cell_; // each cell's colour (terrain or overlay)
+    std::vector<std::uint8_t> terrain_px_;   // ...as RGBA, for the upload
     std::vector<std::uint8_t> fog_px_;       // RGBA, one texel per cell
+    Contours contours_;                      // the elevation overlay's lines (else empty)
     std::optional<SubCell> core_;
     std::vector<Spawn> spawns_;
     double bake_ms_ = 0.0;

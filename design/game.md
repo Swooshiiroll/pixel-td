@@ -33,12 +33,12 @@ edges or inside it.
 **View**
 - Flat top-down, looking straight down.
 - Pixel-perfect: the world is drawn 1:1 and shown at a whole-number scale. The view fills the
-  window, and the default zoom shows about 640x360 world pixels. Zooming out past 1x, to 1/2 and
-  then the whole map, is the one exception: those steps are drawn shrunk and smooth.
-- The map is 5120 x 2880 px: four 1440p screens in a 2 x 2 layout, or 64 views at the default zoom.
+  window, and the default zoom shows about 640x360 world pixels. Zooming out past 1x, through halving
+  steps to the whole map, is the one exception: those steps are drawn shrunk and smooth.
+- The map is 15360 x 8640 px: 36 1440p screens, or 576 views at the default zoom.
   The camera pans and zooms in whole-number steps, then out to the whole map ([world.md](world.md)).
 - The terrain is a seamless heightmap: brightness shows height, and hue shows the ground material.
-- A hidden grid of 16 px cells (320 x 180) sits under it, for terrain and pathfinding.
+- A hidden grid of 16 px cells (960 x 540) sits under it, for terrain and pathfinding.
 - Towers and the core snap to an 8 px placement subgrid.
   - A light tower is 3x3 subcells (24 px).
   - A heavy tower is 6x6 (48 px).

@@ -36,7 +36,7 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - Tab opens the map-tuning panel (seed, every generator and noise setting, live stats, presets).
 - **Developer flags:**
   - `--seed N` uses seed N (decimal, or hex with `0x`).
-  - `--map-shot f.bmp` saves the whole 5120x2880 map and exits (fully explored, unless probes are given).
+  - `--map-shot f.bmp` saves the whole map and exits (fully explored, unless probes are given), at `--map-scale 2|4|8` (default 4: 3840x2160).
   - `--probe X,Y` places a probe with its top-left at subcell X,Y (the 8 px placement subgrid; repeatable).
   - `--zoom whole|half|N` starts at the whole map, the 1/2 step or the whole-number scale N.
   - `--no-fog` starts with the fog hidden.

@@ -68,8 +68,9 @@ ZoomSteps zoom_steps(int window_w, int window_h) noexcept {
     }
     out.standard = 1;
     const Zoom fit = whole_map_zoom(window_w, window_h);
-    if (farthest == 1 && farther(fit, Zoom{1, 2})) {
-        push({1, 2});
+    // Halving steps, while each still shows less than the whole map.
+    for (int den = 2; farthest == 1 && den <= 1024 && farther(fit, Zoom{1, den}); den *= 2) {
+        push({1, den});
     }
     if (farther(fit, out.steps[static_cast<std::size_t>(out.count - 1)])) {
         push(fit);
@@ -81,11 +82,11 @@ ViewSize visible_area(ViewSize view) noexcept {
     return {std::clamp(view.w, 0, kMapPxW), std::clamp(view.h, 0, kMapPxH)};
 }
 
-int map_share_permille(ViewSize view) noexcept {
+int map_share_bp(ViewSize view) noexcept {
     const ViewSize a = visible_area(view);
     const long long shown = static_cast<long long>(a.w) * a.h;
     const long long map = static_cast<long long>(kMapPxW) * kMapPxH;
-    return static_cast<int>(shown * 1000 / map);
+    return static_cast<int>(shown * 10000 / map);
 }
 
 CameraPos clamp_camera(CameraPos cam, ViewSize view) noexcept {

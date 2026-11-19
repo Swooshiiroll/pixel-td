@@ -63,8 +63,8 @@ struct GenParams {
 
     // --- Rock formations: noise-edged blobs that tower over the terrain.
     NoiseSpec formation_rough{6}; // shapes their edges and tops
-    int formations_min = 6;
-    int formations_max = 12;
+    int formations_min = 54;      // about 6-12 per 320 x 180 cells, scaled with the map
+    int formations_max = 108;
     int formation_radius_min = 5; // cells; formations are about 10 to 32 cells across
     int formation_radius_max = 16;
     int formation_scale_min_pct = 45; // the roughness scales the radius^2 between these
@@ -83,8 +83,8 @@ struct GenParams {
     // --- Spawns.
     std::array<int, 3> spawn_waves{1, 10, 20}; // one spawn per entry, opening at that wave
     int spawn_edge_pct = 50;                   // chance a spawn is on an edge (else inside)
-    int min_spawn_dist = 120;                  // walking steps from the core, at least
-    int spawn_spacing = 60;                    // cells between spawns, at least
+    int min_spawn_dist = 360;                  // walking steps from the core, at least
+    int spawn_spacing = 180;                   // cells between spawns, at least
 
     // --- Towers (until towers have their own data), sight and range (design/world.md).
     int light_range_px = 72;        // a light tower's base range (4.5 cells)

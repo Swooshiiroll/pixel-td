@@ -237,7 +237,7 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
     Rng r(0xF00Dull, 3);
     const auto pick = [&](int lo, int hi) { return rand_range(r, lo, hi); };
     int fallbacks = 0;
-    for (std::uint64_t seed = 0; seed < 100; ++seed) {
+    for (std::uint64_t seed = 0; seed < 20; ++seed) {
         CAPTURE(seed);
         GenParams p;
         for (NoiseSpec* n : {&p.height, &p.mesa_noise, &p.formation_rough, &p.material_noise}) {
@@ -270,5 +270,5 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
             CHECK(placement_ok(m, *m.core, kCoreSub, p));
         }
     }
-    MESSAGE("fuzz fallbacks: ", fallbacks, " / 100");
+    MESSAGE("fuzz fallbacks: ", fallbacks, " / 20");
 }

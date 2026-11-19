@@ -39,12 +39,13 @@ struct Zoom {
 // The zoom steps for a window, closest first:
 // - whole-number steps from one closer than the standard down to the last whole step whose view
 //   still fits inside the map (1x unless the window is bigger than the map);
-// - then 1/2, if the farthest whole step is 1x and the whole map needs less than half;
+// - then, if the farthest whole step is 1x, halving steps (1/2, 1/4, 1/8, ...) while each still
+//   shows less than the whole map;
 // - then the whole map, fitted to the window, if it's farther than the last step.
 // `standard` is the default step: the largest whole scale whose view is at least 640 x 360 (and
 // fits inside the map).
 struct ZoomSteps {
-    std::array<Zoom, 16> steps{};
+    std::array<Zoom, 48> steps{};
     int count = 0;
     int standard = 0;
 };
@@ -69,8 +70,8 @@ struct CameraPos {
 // step can be wider or taller than the map, with bars).
 [[nodiscard]] ViewSize visible_area(ViewSize view) noexcept;
 
-// That area's share of the map, in tenths of a percent (0..1000).
-[[nodiscard]] int map_share_permille(ViewSize view) noexcept;
+// That area's share of the map, in hundredths of a percent (0..10000).
+[[nodiscard]] int map_share_bp(ViewSize view) noexcept;
 
 // Keeps the view inside the map; centres it on any axis where the view is wider than the map.
 [[nodiscard]] CameraPos clamp_camera(CameraPos cam, ViewSize view) noexcept;

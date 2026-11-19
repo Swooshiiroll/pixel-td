@@ -17,6 +17,7 @@ them under its version (see CLAUDE.md, "Releasing").
 - Tuning: the downhill range bonus has no cap (it grows with the drop, +5% per 10 height units); mesas terrace every 20 height units instead of 40; the elevation overlay has a colour stop every 20 units (#19).
 - Smoother mesas (terracing fades in over 8 cells from a mesa's edge, and table tops keep up to 6 units of the slope under them, so they stay buildable); every noise layer gets tunable octaves (count, size, lacunarity, persistence), curve, domain warp and shape; generator presets as text (settings only) (#21).
 - Map-tuning panel (Tab, developer tool, Dear ImGui 1.93.0): seed, every generator and noise setting with a live low-detail preview while dragging, live stats, and named presets (settings only); `--preset FILE` and `--panel` (#23).
+- The map is 3 x 3 bigger: 15360x8640 (960 x 540 cells), drawn straight from a cell-sized texture stretched by the GPU, so the game uses less than half the memory it did at a ninth of the size; zooming out halves down to the whole map; the elevation overlay draws contour lines as lines; spawns sit farther from the core (360 / 180, start values) and formations keep their density (54-108); map shots save at reduced scale (`--map-scale`) (#25).
 
 ### Changed
 - Faster CI: the check and unit-test jobs are merged into one core-only job (no SDL), and tools, apt packages and compiled objects are cached between runs; the unit tests only run when a push changes a system or object (#17).

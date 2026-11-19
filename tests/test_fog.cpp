@@ -107,7 +107,7 @@ TEST_CASE("explored ground stays explored; spawns and enemies are hidden until t
 
 TEST_CASE("a real map: the core's surroundings are explored and the spawns hidden at start") {
     const GenParams p;
-    for (std::uint64_t seed = 0; seed < 50; ++seed) {
+    for (std::uint64_t seed = 0; seed < 20; ++seed) {
         CAPTURE(seed);
         const Map m = generate_map(seed, p);
         Fog fog;

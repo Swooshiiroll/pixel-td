@@ -4,7 +4,8 @@ Status: **confirmed by the owner** (PR #4, 2026-11-18), then **reworked by the o
 (issue #5). The world became a seamless heightmap. The seed now places the core and the spawns,
 and enemies find their own way instead of following a generated path (see
 [pathfinding](#enemies-and-routes)). The owner then resized the map to 5120 x 2880 px on 16 px
-cells, with an 8 px placement subgrid and a zoom-out to the whole map (issue #15).
+cells, with an 8 px placement subgrid and a zoom-out to the whole map (issue #15), and then to
+15360 x 8640 px, 3 x 3 that size, drawn straight from the cells to keep memory small (issue #25).
 
 Numbers marked **(start)** are starting values. They live in the live-tuning data file and get
 adjusted by feel in the test arena; the owner chose this over settling them on paper.
@@ -22,10 +23,10 @@ towers shape the rest of their route.
 
 | What | Size |
 |---|---|
-| Map | **5120 x 2880 px**: four 2560x1440 screens in a 2 x 2 layout |
-| Hidden grid | 16 x 16 px cells: **320 x 180 cells** |
-| Placement subgrid | 8 x 8 px subcells: 640 x 360 (two per cell each way) |
-| Screen at default zoom | about 640 x 360 px (40 x 22.5 cells), a 64th of the map; see Camera |
+| Map | **15360 x 8640 px**: nine 5120x2880 areas in a 3 x 3 layout (36 1440p screens) |
+| Hidden grid | 16 x 16 px cells: **960 x 540 cells** |
+| Placement subgrid | 8 x 8 px subcells: 1920 x 1080 (two per cell each way) |
+| Screen at default zoom | about 640 x 360 px (40 x 22.5 cells), a 576th of the map; see Camera |
 | Light tower | 3 x 3 subcells (24 px) |
 | Heavy tower | 6 x 6 subcells (48 px) |
 | Core | 9 x 9 subcells (72 px) |
@@ -71,7 +72,7 @@ Every cell has:
   cliff.
   - Enemies can't cross a cliff, in either direction.
   - A cell beside a cliff can't be built on.
-- **Rock formations.** Large outcrops, **6–12 per map**, each about **10–32 cells across (start)**. They
+- **Rock formations.** Large outcrops, **54–108 per map**, each about **10–32 cells across (start)**. They
   stand far above the surrounding terrain, at height 210–255.
   - Nothing can be built on them.
   - Nothing can walk through them.
@@ -109,8 +110,8 @@ first build phase.
 3. **Spawns:** the seed places **3**, each on a map edge or inside the map (chosen 50/50
    **(start)**).
    - **Reachable:** each can reach the core without crossing a cliff or a formation.
-   - **Far enough:** each is at least **120 steps (start)** from the core by the shortest walk.
-   - **Spread out:** spawns are at least **60 cells (start)** apart.
+   - **Far enough:** each is at least **360 steps (start)** from the core by the shortest walk.
+   - **Spread out:** spawns are at least **180 cells (start)** apart.
    - **Opening times:** one is active from wave 1, the second opens at wave 10 and the third at
      wave 20 **(start)**.
    - **Hidden** until explored (see Visibility).
@@ -173,23 +174,28 @@ Fog works as **explored ground**:
   - **Zooming in** goes one step closer than the default: 4x on 1080p, which shows 480x270.
   - **Zooming out**, the whole-number steps go down to 1x (or the last whole step whose view still
     fits inside the map, on windows bigger than it). Then:
-    - **1/2**, if 1x doesn't already show more than half the map's width: on 1080p it shows
-      3840 x 2160;
+    - **halving steps**, 1/2, 1/4, 1/8 and so on, while each still shows less than the whole map;
     - **the whole map**, fitted to the window. If the window's shape differs from the map's, the
       rest is dark bars.
   - **Pixel-perfect exception:** the steps below 1x (and any other fractional step) are drawn
-    shrunk and **smooth**: from copies of the terrain averaged down 2x and 4x, then filtered. These
-    are the only views that aren't pixel-perfect. Play continues at every step.
+    shrunk and **smooth**. These are the only views that aren't pixel-perfect. Play continues at
+    every step.
   - At the whole-number steps the view **fills the window**, with no bars.
   - **Controls:** the mouse wheel zooms about the cursor, and + and - zoom about the centre of the
     screen.
 
 | Window | Zoom steps (closest → farthest) |
 |---|---|
-| 1920x1080 | 4x, **3x (default)**, 2x, 1x, 1/2, whole map (0.375) |
-| 2560x1440 | 5x, **4x**, 3x, 2x, 1x, whole map (0.5) |
-| 3840x2160 | 7x, **6x**, …, 1x, whole map (0.75) |
-| 1280x720 | 3x, **2x**, 1x, 1/2, whole map (0.25) |
+| 1920x1080 | 4x, **3x (default)**, 2x, 1x, 1/2, 1/4, whole map (1/8) |
+| 2560x1440 | 5x, **4x**, 3x, 2x, 1x, 1/2, 1/4, whole map (1/6) |
+| 3840x2160 | 7x, **6x**, …, 1x, 1/2, whole map (1/4) |
+| 1280x720 | 3x, **2x**, 1x, 1/2, 1/4, 1/8, whole map (1/12) |
+
+**How the terrain is drawn.** Every cell gets one colour (brightness from height, hill shading,
+muted material hue, formation shadows), stored in a 960 x 540 texture of about 2 MB. The GPU
+stretches it with linear filtering, so each pixel blends the four nearest cell centres: the terrain
+is seamless, and the whole map costs that one small texture at any size, with nothing to bake. At
+whole-number steps it's drawn 1:1 in world pixels and then scaled up crisp, as before.
 - The camera starts centred on the core.
 
 ### Developer tools
@@ -201,7 +207,8 @@ are launch flags and keys for development, not settings in the game.
 - **F5** makes a new map from a new random seed.
 - The **HUD** shows the seed, the zoom, the generation time, and the cell under the cursor with its
   height.
-- `--map-shot file.bmp` saves the whole 5120x2880 map as an image (fully explored), then exits.
+- `--map-shot file.bmp` saves the whole map as an image (fully explored), then exits. It's saved at
+  reduced scale: `--map-scale 2|4|8`, default 4 (3840 x 2160).
 - **F** hides and shows the fog. While it's off, the haze is gone and hidden spawns show; exploring
   carries on underneath, and the HUD says "fog off". `--no-fog` starts with it off.
 - `--zoom whole|half|N` starts at the whole-map step, the 1/2 step, or the whole-number scale N.
@@ -210,8 +217,7 @@ are launch flags and keys for development, not settings in the game.
 - **Map-tuning panel** (Tab; `--panel` opens it at start): the seed (hex box, previous, next,
   random), every generator number including each noise layer's octaves, curve, shape and warp, live
   stats (attempts, fallback, timings, cliff, formation and buildable shares, spawn walks) and
-  presets. While a slider is dragged the map regenerates with a fast 320 x 180 preview; letting go
-  redraws it fully. Presets are settings only, saved by name to `presets/<name>.txt` next to the
+  presets. While a slider is dragged the map regenerates and redraws (at most every 120 ms). Presets are settings only, saved by name to `presets/<name>.txt` next to the
   game; `--preset FILE` generates with one at start (also for map shots). Making a preset the
   defaults is a pull request (#23).
 
@@ -271,7 +277,7 @@ All in `src/core`, headless, in doctest:
   - flat-footprint building, with cliff cells and formations refused.
 - **Sweep over 1,000 seeds.** For each map:
   - the core is in the central third, on buildable ground;
-  - 3 spawns, each reachable, at least 120 steps from the core and at least 60 cells apart;
+  - 3 spawns, each reachable, at least 360 steps from the core and at least 180 cells apart;
   - every edge spawn touches the edge;
   - the terrain shares stay in bounds;
   - the fallback is never used.
