@@ -78,7 +78,8 @@ jobs:
         run: tools/dev.sh test
       - name: Unit tests skipped
         if: steps.scope.outputs.tests != 'full'
-        run: echo "::notice::Unit tests skipped: this push changes no system or object (src/core, tests, CMake, CI or tools)."
+        run: |
+          echo "::notice::Unit tests skipped: this push changes no system or object (src/core, tests, CMake, CI or tools)."
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
