@@ -1,121 +1,230 @@
-// Pixel TD: SDL3 front end. Everything is drawn into a 640x360 render target, then shown at the
-// largest whole-number scale that fits the window (letterboxed), so pixels stay square and crisp.
+// Pixel TD: SDL3 front end. At whole-number zoom steps the world is drawn 1:1 into a view texture
+// of (window size / scale), then shown at that scale: pixels stay square and crisp, and the view
+// fills the window. Zoomed out past 1x (1/2 and the whole map) it's drawn straight into a
+// window-sized texture, shrunk and smooth: the one exception to pixel-perfect (design/world.md,
+// Camera).
 //
-//   PixelTD [--frames N] [--screenshot file.bmp]
+//   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--zoom STEP] [--no-fog] [--window WxH]
+//           [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
+//     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
+//     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
+//                       subgrid; repeatable)
+//     --overlay NAME    developer tool: start in an overlay: elevation, octave1, octave2, octave3,
+//                       height, mesa, rough or material (issue #13)
+//     --zoom STEP       developer tool: start at `whole` (the whole map), `half`, or the
+//                       whole-number scale N
+//     --no-fog          developer tool: start with the fog hidden (F toggles it)
+//     --window WxH      developer tool: open the window at W x H (screenshots)
+//     --map-shot F      developer tool: save the whole 5120x2880 map to F (BMP), then exit. With
+//                       no probes everything is shown explored; with probes, the fog is shown.
 //     --frames N        quit after N frames (smoke tests)
-//     --screenshot F    with --frames: save the last 640x360 frame to F (BMP)
+//     --screenshot F    with --frames: save the last frame to F (BMP)
+//
+// Controls: pan with WASD / arrows / the window edges / right-drag; zoom with the mouse wheel or
+// + and -, out to the whole map; developer tools: P toggles probe placement and a left-click
+// places one (a light tower's sight and reach), O / Shift+O step through the overlays, F hides
+// and shows the fog, F5 makes a new random map; Esc quits.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
+#include "core/camera.hpp"
 #include "core/fixed_step.hpp"
+#include "core/fog.hpp"
+#include "core/gen_params.hpp"
+#include "core/grid.hpp"
+#include "core/hash.hpp"
+#include "core/los.hpp"
+#include "core/map.hpp"
+#include "core/mapgen.hpp"
+#include "core/overlay.hpp"
+#include "core/terrain.hpp"
+#include "game/map_view.hpp"
 
 namespace {
 
-constexpr int kViewW = 640;
-constexpr int kViewH = 360;
-constexpr int kTile = 32;
-constexpr int kCols = kViewW / kTile; // 20
-constexpr int kRows = kViewH / kTile; // 11; the 8 px left at the bottom is the status strip
+using namespace pixeltd;
+using pixeltd::game::DrawXf;
+using pixeltd::game::MapView;
+
 constexpr std::int64_t kTickNs = 1'000'000'000 / 60;
 constexpr int kMaxTicksPerFrame = 8;
+constexpr int kPanPerTick = 18;  // window pixels per tick, the same speed at every zoom
+constexpr float kEdgePan = 8.0f; // window points from the edge that start edge panning
+constexpr SDL_Color kProbeColour{250, 220, 120, 200};
+
+// The --zoom option.
+enum class StartZoom : std::uint8_t { Standard, Whole, Half, Scale };
 
 struct Options {
     long frames = 0;
     const char* screenshot = nullptr;
+    const char* map_shot = nullptr;
+    bool has_seed = false;
+    std::uint64_t seed = 0;
+    std::vector<SubCell> probes;
+    Overlay overlay = Overlay::Off;
+    StartZoom zoom = StartZoom::Standard;
+    int zoom_scale = 0;
+    bool no_fog = false;
+    int window_w = kStandardViewW * 2;
+    int window_h = kStandardViewH * 2;
 };
+
+// Parses "A<sep>B" into two whole numbers. False on anything else.
+bool parse_pair(const char* text, char sep, int& a, int& b) {
+    char* end = nullptr;
+    const long x = std::strtol(text, &end, 10);
+    if (end == text || *end != sep) {
+        return false;
+    }
+    const char* rest = end + 1;
+    const long y = std::strtol(rest, &end, 10);
+    if (end == rest || *end != '\0') {
+        return false;
+    }
+    a = static_cast<int>(x);
+    b = static_cast<int>(y);
+    return true;
+}
 
 bool parse_options(int argc, char** argv, Options& out) {
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+        const bool has_value = i + 1 < argc;
+        if (std::strcmp(argv[i], "--frames") == 0 && has_value) {
             out.frames = std::strtol(argv[++i], nullptr, 10);
-        } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
+        } else if (std::strcmp(argv[i], "--screenshot") == 0 && has_value) {
             out.screenshot = argv[++i];
+        } else if (std::strcmp(argv[i], "--map-shot") == 0 && has_value) {
+            out.map_shot = argv[++i];
+        } else if (std::strcmp(argv[i], "--seed") == 0 && has_value) {
+            char* end = nullptr;
+            out.seed = std::strtoull(argv[++i], &end, 0);
+            out.has_seed = end != nullptr && *end == '\0';
+            if (!out.has_seed) {
+                std::fprintf(stderr, "--seed takes a number (decimal or 0x hex)\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--probe") == 0 && has_value) {
+            SubCell c;
+            if (!parse_pair(argv[++i], ',', c.x, c.y)) {
+                std::fprintf(stderr, "--probe takes a subcell as X,Y\n");
+                return false;
+            }
+            out.probes.push_back(c);
+        } else if (std::strcmp(argv[i], "--overlay") == 0 && has_value) {
+            if (!parse_overlay(argv[++i], out.overlay)) {
+                std::fprintf(stderr, "--overlay takes elevation, octave1, octave2, octave3, "
+                                     "height, mesa, rough or material\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--zoom") == 0 && has_value) {
+            const char* z = argv[++i];
+            char* end = nullptr;
+            if (std::strcmp(z, "whole") == 0) {
+                out.zoom = StartZoom::Whole;
+            } else if (std::strcmp(z, "half") == 0) {
+                out.zoom = StartZoom::Half;
+            } else if (const long k = std::strtol(z, &end, 10); end != z && *end == '\0' && k > 0) {
+                out.zoom = StartZoom::Scale;
+                out.zoom_scale = static_cast<int>(k);
+            } else {
+                std::fprintf(stderr, "--zoom takes whole, half or a whole-number scale\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--no-fog") == 0) {
+            out.no_fog = true;
+        } else if (std::strcmp(argv[i], "--window") == 0 && has_value) {
+            if (!parse_pair(argv[++i], 'x', out.window_w, out.window_h) || out.window_w < 1 ||
+                out.window_h < 1) {
+                std::fprintf(stderr, "--window takes a size as WxH\n");
+                return false;
+            }
         } else {
-            std::fprintf(stderr, "usage: PixelTD [--frames N] [--screenshot file.bmp]\n");
+            std::fprintf(stderr,
+                         "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
+                         "[--zoom whole|half|N] [--no-fog] [--window WxH] [--map-shot file.bmp] "
+                         "[--frames N] [--screenshot file.bmp]\n");
             return false;
         }
     }
     return true;
 }
 
-// Placeholder scene state until the game exists: one marker running along the middle row.
-struct Scene {
-    float x = 0.0f;
-    float speed = 2.0f; // px per tick
+// Normal runs get a fresh random seed; the simulation itself never reads the clock.
+std::uint64_t random_seed() {
+    return splitmix64(SDL_GetPerformanceCounter() ^ (SDL_GetTicksNS() << 17u));
+}
+
+struct World {
+    Map map;
+    GenParams params;
+    GenLayers layers; // the noise behind the map, for the overlays
+    Fog fog;
+    std::vector<SubCell> probes; // top-left subcells of placed probes (light-tower sized)
+    double gen_ms = 0.0;
+
+    [[nodiscard]] int probe_range_px() const noexcept { return params.light_range_px; }
 };
 
-void update(Scene& s) {
-    s.x += s.speed;
-    const float max_x = static_cast<float>(kViewW - kTile);
-    if (s.x < 0.0f || s.x > max_x) {
-        s.speed = -s.speed;
-        s.x = std::clamp(s.x, 0.0f, max_x);
-    }
+// True if two square subcell footprints overlap.
+bool overlap(SubCell a, int a_size, SubCell b, int b_size) {
+    return a.x < b.x + b_size && b.x < a.x + a_size && a.y < b.y + b_size && b.y < a.y + a_size;
 }
 
-// Where the 640x360 view lands in a window of out_w x out_h pixels.
-SDL_FRect view_rect(int out_w, int out_h) {
-    const int scale = std::min(out_w / kViewW, out_h / kViewH);
-    if (scale < 1) { // window smaller than the view: shrink to fit (not pixel-perfect)
-        const float f =
-            std::min(static_cast<float>(out_w) / kViewW, static_cast<float>(out_h) / kViewH);
-        const float w = kViewW * f;
-        const float h = kViewH * f;
-        return {(static_cast<float>(out_w) - w) / 2.0f, (static_cast<float>(out_h) - h) / 2.0f, w,
-                h};
+// A probe can go where a light tower could: flat, buildable ground, off the core and other probes.
+bool probe_fits(const World& world, SubCell top_left) {
+    if (!placement_ok(world.map, top_left, kLightSub, world.params)) {
+        return false;
     }
-    const int w = kViewW * scale;
-    const int h = kViewH * scale;
-    return {static_cast<float>((out_w - w) / 2), static_cast<float>((out_h - h) / 2),
-            static_cast<float>(w), static_cast<float>(h)};
+    if (world.map.core && overlap(top_left, kLightSub, *world.map.core, kCoreSub)) {
+        return false;
+    }
+    return std::none_of(world.probes.begin(), world.probes.end(),
+                        [&](SubCell c) { return overlap(top_left, kLightSub, c, kLightSub); });
 }
 
-void draw_scene(SDL_Renderer* r, const Scene& prev, const Scene& cur, float alpha,
-                const char* status) {
-    SDL_SetRenderDrawColor(r, 12, 10, 24, 255);
-    SDL_RenderClear(r);
-
-    // Build-tile checkerboard, with a lane along the middle row.
-    for (int row = 0; row < kRows; ++row) {
-        for (int col = 0; col < kCols; ++col) {
-            const bool lane = row == kRows / 2;
-            const bool dark = ((row + col) & 1) != 0;
-            if (lane) {
-                SDL_SetRenderDrawColor(r, 70, 58, 44, 255);
-            } else if (dark) {
-                SDL_SetRenderDrawColor(r, 28, 34, 52, 255);
-            } else {
-                SDL_SetRenderDrawColor(r, 34, 42, 62, 255);
-            }
-            const SDL_FRect tile = {static_cast<float>(col * kTile),
-                                    static_cast<float>(row * kTile), static_cast<float>(kTile),
-                                    static_cast<float>(kTile)};
-            SDL_RenderFillRect(r, &tile);
-        }
+// Places a probe and lifts the fog it sees. False if it doesn't fit there.
+bool place_probe(World& world, MapView& view, SubCell top_left) {
+    if (!probe_fits(world, top_left)) {
+        return false;
     }
-
-    // The marker, interpolated between the last two ticks and snapped to the pixel grid.
-    const float x = prev.x + (cur.x - prev.x) * alpha;
-    const SDL_FRect marker = {SDL_floorf(x) + 8.0f, static_cast<float>((kRows / 2) * kTile + 8),
-                              16.0f, 16.0f};
-    SDL_SetRenderDrawColor(r, 255, 140, 48, 255);
-    SDL_RenderFillRect(r, &marker);
-
-    SDL_SetRenderDrawColor(r, 160, 230, 200, 255);
-    SDL_RenderDebugText(r, 2.0f, static_cast<float>(kRows * kTile), status);
+    world.probes.push_back(top_left);
+    const Rect lifted = world.fog.explore_from(world.map, centre_of(top_left, kLightSub),
+                                               world.probe_range_px(), world.params);
+    view.update_fog(world.fog, lifted);
+    return true;
 }
 
-bool save_view(SDL_Renderer* r, const char* path) {
+bool new_map(World& world, MapView& view, std::uint64_t seed) {
+    const Uint64 start = SDL_GetTicksNS();
+    world.map = generate_map(seed, world.params, &world.layers);
+    world.gen_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
+    world.probes.clear();
+    world.fog.reset();
+    world.fog.explore_core(world.map, world.params.light_range_px);
+    const Map& m = world.map;
+    const bool ok = view.set_map(m, world.layers, world.fog);
+    SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
+            "subcell %d,%d; %zu spawns",
+            static_cast<unsigned long long>(seed), world.gen_ms, m.stats.attempts,
+            m.stats.fallback ? ", FALLBACK" : "", view.bake_ms(), m.core ? m.core->x : -1,
+            m.core ? m.core->y : -1, m.spawns.size());
+    return ok;
+}
+
+bool save_target(SDL_Renderer* r, const char* path) {
     SDL_Surface* shot = SDL_RenderReadPixels(r, nullptr);
     if (shot == nullptr) {
-        SDL_Log("screenshot failed: %s", SDL_GetError());
+        SDL_Log("reading pixels failed: %s", SDL_GetError());
         return false;
     }
     const bool ok = SDL_SaveBMP(shot, path);
@@ -124,6 +233,236 @@ bool save_view(SDL_Renderer* r, const char* path) {
     }
     SDL_DestroySurface(shot);
     return ok;
+}
+
+// The window's view: its zoom steps and current step, and the render target. At whole-number
+// steps the target is the view's size (shown scaled up, crisp); at fractional steps it's the
+// window's size (the world is drawn shrunk into it). Recreated whenever the window's pixel size
+// or the zoom changes.
+struct Screen {
+    int out_w = 0;
+    int out_h = 0;
+    ZoomSteps steps{};
+    int offset = 0; // steps out from the standard zoom (negative = closer), kept across resizes
+    int index = 0;  // the current step
+    Zoom zoom{};
+    ViewSize view{};
+    SDL_Texture* target = nullptr;
+    int target_w = 0;
+    int target_h = 0;
+
+    [[nodiscard]] float k() const noexcept {
+        return static_cast<float>(zoom.num) / static_cast<float>(zoom.den);
+    }
+};
+
+bool refresh_screen(SDL_Renderer* r, Screen& s) {
+    int w = 0;
+    int h = 0;
+    SDL_GetRenderOutputSize(r, &w, &h);
+    s.out_w = w;
+    s.out_h = h;
+    s.steps = zoom_steps(w, h);
+    s.index = std::clamp(s.steps.standard + s.offset, 0, s.steps.count - 1);
+    s.offset = s.index - s.steps.standard;
+    s.zoom = s.steps.steps[static_cast<std::size_t>(s.index)];
+    s.view = view_size(w, h, s.zoom);
+    const bool crisp = pixel_perfect(s.zoom);
+    const int tw = crisp ? s.view.w : w;
+    const int th = crisp ? s.view.h : h;
+    if (s.target != nullptr && tw == s.target_w && th == s.target_h) {
+        return true;
+    }
+    if (s.target != nullptr) {
+        SDL_DestroyTexture(s.target);
+    }
+    s.target = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, tw, th);
+    if (s.target == nullptr) {
+        SDL_Log("view target %dx%d failed: %s", tw, th, SDL_GetError());
+        return false;
+    }
+    s.target_w = tw;
+    s.target_h = th;
+    SDL_SetTextureScaleMode(s.target, SDL_SCALEMODE_NEAREST);
+    return true;
+}
+
+// Sets the starting zoom step from --zoom (after the first refresh_screen).
+void apply_start_zoom(SDL_Renderer* r, Screen& s, StartZoom start, int scale) {
+    int index = s.steps.standard;
+    for (int i = 0; i < s.steps.count; ++i) {
+        const Zoom z = s.steps.steps[static_cast<std::size_t>(i)];
+        if ((start == StartZoom::Half && z == Zoom{1, 2}) ||
+            (start == StartZoom::Scale && z == Zoom{scale, 1})) {
+            index = i;
+        }
+    }
+    if (start == StartZoom::Whole || (start == StartZoom::Half && index == s.steps.standard)) {
+        index = s.steps.count - 1; // no separate 1/2 step: the whole map is already that far out
+    }
+    s.offset = index - s.steps.standard;
+    refresh_screen(r, s);
+}
+
+// Centres the view on a pixel rectangle.
+CameraPos centred_on(const RectPx& area, ViewSize view) {
+    const int cx = area.x + area.w / 2;
+    const int cy = area.y + area.h / 2;
+    return clamp_camera({cx - view.w / 2, cy - view.h / 2}, view);
+}
+
+// The core's footprint (or the map's centre if there's no core).
+RectPx core_rect(const Map& map) {
+    return map.core ? rect_of(*map.core, kCoreSub) : RectPx{kMapPxW / 2, kMapPxH / 2, 1, 1};
+}
+
+// Steps the zoom by `delta` (positive = closer), keeping the world point under (px, py) in place.
+void zoom_by(SDL_Renderer* r, Screen& s, CameraPos& cam, int delta, int px, int py) {
+    const int index = std::clamp(s.index - delta, 0, s.steps.count - 1);
+    if (index == s.index) {
+        return;
+    }
+    const Zoom from = s.zoom;
+    s.offset = index - s.steps.standard;
+    if (!refresh_screen(r, s)) {
+        return;
+    }
+    cam = clamp_camera(zoom_about(cam, from, s.zoom, px, py), s.view);
+}
+
+// The overlay's value under the cursor, for the HUD's second line.
+void describe_overlay(const World& world, Overlay overlay, Cell hover, char* out, std::size_t n) {
+    const GenLayers& L = world.layers;
+    const Map& m = world.map;
+    if (!m.height.in_bounds(hover)) {
+        std::snprintf(out, n, "view: %s", overlay_label(overlay));
+        return;
+    }
+    if (overlay == Overlay::Elevation) {
+        std::snprintf(out, n, "view: %s  height %d", overlay_label(overlay), m.height.at(hover));
+        return;
+    }
+    if (!L.valid) {
+        std::snprintf(out, n, "view: %s  fallback map: no noise", overlay_label(overlay));
+        return;
+    }
+    int value = 0;
+    switch (overlay) {
+    case Overlay::Octave1:
+        value = L.octave[0].at(hover);
+        break;
+    case Overlay::Octave2:
+        value = L.octave[1].at(hover);
+        break;
+    case Overlay::Octave3:
+        value = L.octave[2].at(hover);
+        break;
+    case Overlay::Height:
+        value = L.height_sum.at(hover);
+        break;
+    case Overlay::Mesa:
+        value = L.mesa_noise.at(hover);
+        break;
+    case Overlay::Rough:
+        value = L.rough.at(hover);
+        break;
+    default:
+        value = L.material.at(hover);
+        break;
+    }
+    std::snprintf(out, n, "view: %s  value %d%s", overlay_label(overlay), value,
+                  overlay == Overlay::Mesa && L.mesa.at(hover) != 0 ? " (terraced)" : "");
+}
+
+// The HUD, drawn into the current target `width` pixels wide (in HUD pixels).
+void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width, Cell hover,
+              bool probe_mode, Overlay overlay, bool fog_shown) {
+    char line[224];
+    char ground[64] = "";
+    char zoom[32];
+    const Map& m = world.map;
+    if (m.height.in_bounds(hover)) {
+        static constexpr const char* kNames[kMaterials] = {"dust", "gravel", "ash", "rust"};
+        const char* what = is_formation(m, hover)                    ? "rock formation"
+                           : is_cliff_cell(m, hover, world.params)   ? "cliff"
+                           : footprint_ok(m, hover, 1, world.params) ? "buildable"
+                                                                     : "";
+        std::snprintf(ground, sizeof ground, "h%d %s %s", m.height.at(hover),
+                      kNames[static_cast<int>(m.material.at(hover))], what);
+    }
+    if (s.zoom.den == 1) {
+        std::snprintf(zoom, sizeof zoom, "%dx", s.zoom.num);
+    } else if (s.index == s.steps.count - 1) {
+        std::snprintf(zoom, sizeof zoom, "whole %.3fx", static_cast<double>(s.k()));
+    } else {
+        std::snprintf(zoom, sizeof zoom, "%d/%d", s.zoom.num, s.zoom.den);
+    }
+    // The relative resolution: the world pixels on screen, and their share of the map.
+    char area[48];
+    const ViewSize shown = visible_area(s.view);
+    const int share = map_share_permille(s.view);
+    if (share >= 1000) {
+        std::snprintf(area, sizeof area, "%dx%d (100%%)", shown.w, shown.h);
+    } else {
+        std::snprintf(area, sizeof area, "%dx%d (%d.%d%%)", shown.w, shown.h, share / 10,
+                      share % 10);
+    }
+    std::snprintf(line, sizeof line, "seed %llx  zoom %s %s  gen %.1fms  cell %d,%d %s%s%s",
+                  static_cast<unsigned long long>(m.seed), zoom, area, world.gen_ms, hover.x,
+                  hover.y, ground, fog_shown ? "" : "  [fog off]",
+                  probe_mode ? "  [PROBE: click to place]" : "");
+    const bool second = overlay != Overlay::Off;
+    const SDL_FRect strip{0.0f, 0.0f, width, second ? 20.0f : 10.0f};
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
+    SDL_RenderFillRect(r, &strip);
+    SDL_SetRenderDrawColor(r, 170, 236, 210, 255);
+    SDL_RenderDebugText(r, 2.0f, 1.0f, line);
+    if (second) {
+        char view[128];
+        describe_overlay(world, overlay, hover, view, sizeof view);
+        SDL_SetRenderDrawColor(r, 255, 220, 140, 255);
+        SDL_RenderDebugText(r, 2.0f, 11.0f, view);
+    }
+}
+
+// Developer tool: renders the whole map once into a 5120x2880 target and saves it.
+int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const std::vector<SubCell>& probes,
+                 Overlay overlay, bool no_fog, const char* path) {
+    World world;
+    MapView view(r);
+    view.set_overlay(overlay, world.map, world.layers, world.fog); // applied by the first bake
+    view.set_fog_shown(!no_fog);
+    if (!new_map(world, view, seed)) {
+        return 1;
+    }
+    if (probes.empty()) {
+        world.fog.explore_all();
+        view.update_fog(world.fog, Rect{0, 0, kMapW, kMapH});
+    }
+    for (const SubCell c : probes) {
+        if (!place_probe(world, view, c)) {
+            SDL_Log("probe at subcell %d,%d doesn't fit (not flat buildable ground, or "
+                    "overlapping)",
+                    c.x, c.y);
+        }
+    }
+    SDL_Texture* full =
+        SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, kMapPxW, kMapPxH);
+    if (full == nullptr) {
+        SDL_Log("map target failed: %s", SDL_GetError());
+        return 1;
+    }
+    SDL_SetRenderTarget(r, full);
+    const DrawXf xf{};
+    view.draw(xf, {kMapPxW, kMapPxH}, world.fog);
+    for (const SubCell c : world.probes) {
+        view.draw_probe(xf, c, kProbeColour);
+    }
+    const bool ok = save_target(r, path);
+    SDL_SetRenderTarget(r, nullptr);
+    SDL_DestroyTexture(full);
+    return ok ? 0 : 1;
 }
 
 } // namespace
@@ -140,10 +479,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const SDL_WindowFlags flags = opts.map_shot != nullptr
+                                      ? SDL_WINDOW_HIDDEN
+                                      : SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
-    if (!SDL_CreateWindowAndRenderer("Pixel TD", kViewW * 2, kViewH * 2,
-                                     SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY, &window,
+    if (!SDL_CreateWindowAndRenderer("Pixel TD", opts.window_w, opts.window_h, flags, &window,
                                      &renderer)) {
         SDL_Log("window/renderer failed: %s", SDL_GetError());
         SDL_Quit();
@@ -151,74 +492,236 @@ int main(int argc, char** argv) {
     }
     SDL_SetRenderVSync(renderer, 1);
 
-    SDL_Texture* view = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-                                          SDL_TEXTUREACCESS_TARGET, kViewW, kViewH);
-    if (view == nullptr) {
-        SDL_Log("render target failed: %s", SDL_GetError());
-        SDL_Quit();
-        return 1;
-    }
-    SDL_SetTextureScaleMode(view, SDL_SCALEMODE_NEAREST);
-
     const char* backend = SDL_GetRendererName(renderer);
     SDL_Log("Pixel TD %s, SDL %d.%d.%d, renderer: %s", PIXELTD_VERSION,
             SDL_VERSIONNUM_MAJOR(SDL_GetVersion()), SDL_VERSIONNUM_MINOR(SDL_GetVersion()),
             SDL_VERSIONNUM_MICRO(SDL_GetVersion()), backend);
 
-    pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
-    Scene prev;
-    Scene cur;
-    char status[96];
-    Uint64 last = SDL_GetTicksNS();
-    long frame = 0;
-    int exit_code = 0;
-    bool running = true;
+    const std::uint64_t first_seed = opts.has_seed ? opts.seed : random_seed();
+    if (opts.map_shot != nullptr) {
+        const int code = run_map_shot(renderer, first_seed, opts.probes, opts.overlay, opts.no_fog,
+                                      opts.map_shot);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return code;
+    }
 
-    while (running) {
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_EVENT_QUIT ||
-                (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE)) {
+    int exit_code = 0;
+    {
+        World world;
+        MapView view(renderer);
+        Screen screen;
+        view.set_overlay(opts.overlay, world.map, world.layers, world.fog); // before the bake
+        view.set_fog_shown(!opts.no_fog);
+        if (!new_map(world, view, first_seed) || !refresh_screen(renderer, screen)) {
+            exit_code = 1;
+        }
+        if (opts.zoom != StartZoom::Standard) {
+            apply_start_zoom(renderer, screen, opts.zoom, opts.zoom_scale);
+        }
+        for (const SubCell c : opts.probes) {
+            if (!place_probe(world, view, c)) {
+                SDL_Log("probe at subcell %d,%d doesn't fit (not flat buildable ground, or "
+                        "overlapping)",
+                        c.x, c.y);
+            }
+        }
+        CameraPos cam = centred_on(core_rect(world.map), screen.view);
+        bool probe_mode = false;
+        Cell hover{};
+        SubCell probe_at{};
+
+        pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
+        Uint64 last = SDL_GetTicksNS();
+        float drag_x = 0.0f;
+        float drag_y = 0.0f;
+        float wheel = 0.0f;
+        long frame = 0;
+        bool running = exit_code == 0;
+
+        while (running) {
+            const float density = SDL_GetWindowPixelDensity(window);
+            SDL_Event e;
+            while (SDL_PollEvent(&e)) {
+                switch (e.type) {
+                case SDL_EVENT_QUIT:
+                    running = false;
+                    break;
+                case SDL_EVENT_KEY_DOWN:
+                    if (e.key.key == SDLK_ESCAPE) {
+                        running = false;
+                    } else if (e.key.key == SDLK_F5) {
+                        if (!new_map(world, view, random_seed())) {
+                            running = false;
+                            exit_code = 1;
+                        }
+                        cam = centred_on(core_rect(world.map), screen.view);
+                    } else if (e.key.key == SDLK_P) {
+                        probe_mode = !probe_mode;
+                    } else if (e.key.key == SDLK_F) {
+                        view.set_fog_shown(!view.fog_shown());
+                    } else if (e.key.key == SDLK_O) {
+                        const int dir = (e.key.mod & SDL_KMOD_SHIFT) != 0 ? -1 : 1;
+                        view.set_overlay(step_overlay(view.overlay(), dir), world.map, world.layers,
+                                         world.fog);
+                        SDL_Log("overlay: %s (baked in %.1f ms)", overlay_label(view.overlay()),
+                                view.bake_ms());
+                    } else if (e.key.key == SDLK_EQUALS || e.key.key == SDLK_KP_PLUS) {
+                        zoom_by(renderer, screen, cam, 1, screen.out_w / 2, screen.out_h / 2);
+                    } else if (e.key.key == SDLK_MINUS || e.key.key == SDLK_KP_MINUS) {
+                        zoom_by(renderer, screen, cam, -1, screen.out_w / 2, screen.out_h / 2);
+                    }
+                    break;
+                case SDL_EVENT_MOUSE_WHEEL: {
+                    const float dir = e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0f : 1.0f;
+                    wheel += e.wheel.y * dir;
+                    const int px = static_cast<int>(e.wheel.mouse_x * density);
+                    const int py = static_cast<int>(e.wheel.mouse_y * density);
+                    while (wheel >= 1.0f) {
+                        zoom_by(renderer, screen, cam, 1, px, py);
+                        wheel -= 1.0f;
+                    }
+                    while (wheel <= -1.0f) {
+                        zoom_by(renderer, screen, cam, -1, px, py);
+                        wheel += 1.0f;
+                    }
+                    break;
+                }
+                case SDL_EVENT_MOUSE_MOTION:
+                    if ((e.motion.state & SDL_BUTTON_RMASK) != 0) {
+                        // Right-drag: the world follows the mouse, in whole world pixels.
+                        drag_x += e.motion.xrel * density;
+                        drag_y += e.motion.yrel * density;
+                        const float k = screen.k();
+                        const int dx = static_cast<int>(drag_x / k);
+                        const int dy = static_cast<int>(drag_y / k);
+                        drag_x -= static_cast<float>(dx) * k;
+                        drag_y -= static_cast<float>(dy) * k;
+                        cam = clamp_camera({cam.x - dx, cam.y - dy}, screen.view);
+                    }
+                    break;
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    if (probe_mode && e.button.button == SDL_BUTTON_LEFT) {
+                        place_probe(world, view, probe_at);
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            if (!refresh_screen(renderer, screen)) {
+                exit_code = 1;
+                break;
+            }
+            cam = clamp_camera(cam, screen.view);
+
+            float mx = 0.0f;
+            float my = 0.0f;
+            SDL_GetMouseState(&mx, &my);
+            int win_w = 0;
+            int win_h = 0;
+            SDL_GetWindowSize(window, &win_w, &win_h);
+            const bool focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0 &&
+                                 SDL_GetMouseFocus() == window;
+
+            const Uint64 now = SDL_GetTicksNS();
+            const int ticks = step.advance(static_cast<std::int64_t>(now - last));
+            last = now;
+            const bool* keys = SDL_GetKeyboardState(nullptr);
+            // The same speed on screen at every zoom.
+            const int pan = std::max(1, kPanPerTick * screen.zoom.den / screen.zoom.num);
+            for (int i = 0; i < ticks; ++i) {
+                int dx = 0;
+                int dy = 0;
+                if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) {
+                    dx -= pan;
+                }
+                if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) {
+                    dx += pan;
+                }
+                if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) {
+                    dy -= pan;
+                }
+                if (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) {
+                    dy += pan;
+                }
+                if (focused) {
+                    if (mx < kEdgePan) {
+                        dx -= pan;
+                    } else if (mx > static_cast<float>(win_w) - kEdgePan) {
+                        dx += pan;
+                    }
+                    if (my < kEdgePan) {
+                        dy -= pan;
+                    } else if (my > static_cast<float>(win_h) - kEdgePan) {
+                        dy += pan;
+                    }
+                }
+                cam = clamp_camera({cam.x + dx, cam.y + dy}, screen.view);
+            }
+
+            // The world pixel under the cursor, the cell it's in, and in probe mode the probe's
+            // top-left subcell so the cursor sits on its centre.
+            const float k = screen.k();
+            const int wx = cam.x + static_cast<int>(mx * density / k);
+            const int wy = cam.y + static_cast<int>(my * density / k);
+            hover = Cell{wx / kCellPx, wy / kCellPx};
+            const int half = kLightSub * kSubPx / 2;
+            probe_at =
+                SubCell{(wx - half + kSubPx / 2) / kSubPx, (wy - half + kSubPx / 2) / kSubPx};
+
+            // Whole-number steps: draw 1:1 into the view target. Fractional: shrunk into the
+            // window-sized target.
+            const bool crisp = pixel_perfect(screen.zoom);
+            const DrawXf xf{cam, crisp ? 1.0f : k, !crisp};
+            SDL_SetRenderTarget(renderer, screen.target);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderClear(renderer);
+            view.draw(xf, screen.view, world.fog);
+            for (const SubCell c : world.probes) {
+                view.draw_probe(xf, c, kProbeColour);
+            }
+            if (probe_mode) {
+                view.draw_probe_preview(xf, world.map, world.params, probe_at,
+                                        probe_fits(world, probe_at), world.probe_range_px());
+            }
+            // The HUD at the standard view's text size: scaled up in the window-sized target.
+            const int hud = crisp ? 1 : std::max(1, screen.out_h / kStandardViewH);
+            SDL_SetRenderScale(renderer, static_cast<float>(hud), static_cast<float>(hud));
+            draw_hud(renderer, world, screen,
+                     static_cast<float>(crisp ? screen.view.w : screen.out_w / hud), hover,
+                     probe_mode, view.overlay(), view.fog_shown());
+            SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+
+            ++frame;
+            const bool last_frame = opts.frames > 0 && frame >= opts.frames;
+            if (last_frame && opts.screenshot != nullptr &&
+                !save_target(renderer, opts.screenshot)) {
+                exit_code = 1;
+            }
+
+            SDL_SetRenderTarget(renderer, nullptr);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderClear(renderer);
+            const SDL_FRect dst =
+                crisp ? SDL_FRect{0.0f, 0.0f, static_cast<float>(screen.view.w * screen.zoom.num),
+                                  static_cast<float>(screen.view.h * screen.zoom.num)}
+                      : SDL_FRect{0.0f, 0.0f, static_cast<float>(screen.target_w),
+                                  static_cast<float>(screen.target_h)};
+            SDL_RenderTexture(renderer, screen.target, nullptr, &dst);
+            SDL_RenderPresent(renderer);
+
+            if (last_frame) {
                 running = false;
             }
         }
-
-        const Uint64 now = SDL_GetTicksNS();
-        const int ticks = step.advance(static_cast<std::int64_t>(now - last));
-        last = now;
-        for (int i = 0; i < ticks; ++i) {
-            prev = cur;
-            update(cur);
-        }
-
-        std::snprintf(status, sizeof status, "Pixel TD %s  |  %s  |  tick %llu", PIXELTD_VERSION,
-                      backend, static_cast<unsigned long long>(step.total_ticks()));
-
-        SDL_SetRenderTarget(renderer, view);
-        draw_scene(renderer, prev, cur, step.alpha(), status);
-
-        ++frame;
-        const bool last_frame = opts.frames > 0 && frame >= opts.frames;
-        if (last_frame && opts.screenshot != nullptr && !save_view(renderer, opts.screenshot)) {
-            exit_code = 1;
-        }
-
-        SDL_SetRenderTarget(renderer, nullptr);
-        int out_w = 0;
-        int out_h = 0;
-        SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
-        const SDL_FRect dst = view_rect(out_w, out_h);
-        SDL_RenderTexture(renderer, view, nullptr, &dst);
-        SDL_RenderPresent(renderer);
-
-        if (last_frame) {
-            running = false;
+        if (screen.target != nullptr) {
+            SDL_DestroyTexture(screen.target);
         }
     }
 
-    SDL_DestroyTexture(view);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

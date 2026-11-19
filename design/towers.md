@@ -35,8 +35,8 @@ Every tower is exactly **one chassis + one weapon + one module**, in three fixed
 
 | Chassis | Footprint | Takes |
 |---|---|---|
-| Light | 2 x 2 cells (24 px) | Light weapons |
-| Heavy | 4 x 4 cells (48 px) | Light **or** heavy weapons |
+| Light | 3 x 3 subcells (24 px) | Light weapons |
+| Heavy | 6 x 6 subcells (48 px) | Light **or** heavy weapons |
 
 The examples are placeholders. The real parts come from pitch and pick (see Designing parts).
 
@@ -125,11 +125,14 @@ the part it upgrades.
 ## Interactions
 
 - **World ([world.md](world.md)):**
-  - footprints on the 12 px grid, never straddling heights;
-  - high ground gives range and fires over rocks;
-  - lobbed weapons arc over rocks;
-  - cliffs block everything;
-  - towers reveal fog within their range.
+  - footprints on the 8 px placement subgrid, on fairly flat ground across every 16 px cell they cover (no cliffs or rock formations);
+  - range grows with height above the target, and shrinks when shooting uphill;
+  - direct fire needs a clear line over the terrain, while lobbed weapons arc over terrain;
+  - rock formations block every shot;
+  - towers explore fog within their reach, by direct sight. That includes lobbed towers, which
+    need a spotter to hit enemies behind a ridge.
+  - Towers also shape the enemies' route (mazing), and enemies break them if sealed in
+    (issue #11).
 - **Economy:** gold pays for building, module swaps and Mk upgrades. Selling and swaps refund part
   of it. Income is open (see [game.md](game.md)).
 - **Draft:** the draft offers parts, starting from the kit. How many choices it offers, and how
@@ -144,7 +147,8 @@ the part it upgrades.
 ## UI
 
 - **Build menu:** pick a chassis, a weapon and a module from the pool.
-  - A preview shows the footprint, the range (with the high-ground bonus) and the total cost.
+  - A preview shows the footprint, the reach (adjusted for height; cells out of reach or sight are
+    shaded) and the total cost.
   - Weapons that don't fit the chassis are greyed out.
 - **Tower panel:**
   - the three parts with their Mk levels;

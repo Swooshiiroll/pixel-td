@@ -10,6 +10,11 @@ them under its version (see CLAUDE.md, "Releasing").
 - Engine skeleton: SDL3 window with a pixel-perfect 640x360 view (32 px tiles, whole-number scaling), fixed 60 Hz simulation clock, PCG32 seeded RNG, doctest unit tests.
 - README and CLAUDE.md link the project board and the workflow page (#1).
 - Design docs for review: game overview, world layout and map generator, tower system (#3).
+- Map generator: a seeded 3840x2160 heightmap drawn seamless (brightness = height, hue = material) with mesas, cliff faces and towering rock formations; the core placed by the seed in the central third and 3 seeded spawns (edge or inside, opening at waves 1, 10, 20); camera with whole-number pan and zoom; developer seed tools (`--seed`, F5, `--map-shot`) (#5).
+- Line of sight and range over the height field (terrain blocks direct fire and sight, rock formations block every shot, lobbed shots arc over terrain; range grows with height above the target); explored-ground fog that hides spawns until found; developer probes (P, `--probe X,Y`) with a reach-and-sight preview (#7).
+- Developer overlays (O / Shift+O, `--overlay NAME`): elevation as colour bands with contour lines, and each of the generator's noise layers (three height octaves, combined height, mesa mask, formation roughness, material) in greyscale (#13).
+- The map is 5120x2880 (2x2 1440p screens) on 16 px cells, with towers and the core snapping to an 8 px placement subgrid (sizes unchanged); zooming out continues past 1x to 1/2 and the whole map, drawn smooth; F hides and shows the fog (developer tool), and the fog is now its own layer, so lifting it no longer re-bakes the terrain (#15).
+- Tuning: the downhill range bonus has no cap (it grows with the drop, +5% per 10 height units); mesas terrace every 20 height units instead of 40; the elevation overlay has a colour stop every 20 units (#19).
 
 ### Changed
 - Faster CI: the check and unit-test jobs are merged into one core-only job (no SDL), and tools, apt packages and compiled objects are cached between runs; the unit tests only run when a push changes a system or object (#17).
