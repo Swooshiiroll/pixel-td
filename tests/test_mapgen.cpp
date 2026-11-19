@@ -41,9 +41,9 @@ constexpr int kCells = kMapW * kMapH;
 // Every rule a generated map must keep (design/world.md, How a map is made).
 void check_map(const Map& m, const GenParams& p) {
     REQUIRE(m.core.has_value());
-    const Cell core = *m.core;
-    REQUIRE(p.core_area.contains(Rect{core.x, core.y, kCoreSize, kCoreSize}));
-    REQUIRE(footprint_ok(m, core, kCoreSize, p));
+    const SubCell core = *m.core;
+    REQUIRE(p.core_area.contains(cells_under(core, kCoreSub)));
+    REQUIRE(placement_ok(m, core, kCoreSub, p));
 
     const Grid<int> dist = walk_distance_to_core(m, p);
     REQUIRE(m.spawns.size() == p.spawn_waves.size());
@@ -109,10 +109,11 @@ TEST_CASE("different seeds give different maps") {
 
 // Pinned results: these must match on every compiler and platform (MSVC locally, GCC on CI). If
 // the generator is changed on purpose, update the values in the same pull request and say why.
+// Last re-pinned in #15: the core moved onto the 8 px subgrid.
 TEST_CASE("golden maps") {
-    CHECK(map_hash(generate_map(1)) == 0x9c91978799476fc7ull);
-    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0xa4853b7b458356eaull);
-    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0x190244e17108311cull);
+    CHECK(map_hash(generate_map(1)) == 0x011d951f0e0018f1ull);
+    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0xc5b806b437ec5b3ull);
+    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0xe83a8f73b844123eull);
 }
 
 TEST_CASE("cliff steps block walking both ways and building beside them") {
@@ -153,19 +154,47 @@ TEST_CASE("building needs fairly flat ground") {
     CHECK(footprint_ok(m, {40, 40}, 2, p));
     m.height.at(41, 41) = static_cast<std::uint8_t>(100 + p.flat_limit + 1);
     CHECK_FALSE(footprint_ok(m, {40, 40}, 2, p));
-    CHECK(footprint_ok(m, {50, 50}, kHeavySize, p));
+    CHECK(footprint_ok(m, {50, 50}, 4, p));
     CHECK_FALSE(footprint_ok(m, {kMapW - 1, 10}, 2, p)); // hangs off the map
+}
+
+TEST_CASE("footprints on the 8 px subgrid cover the cells under them") {
+    // A light tower (3 subcells) always covers 2 cells a side, at even or odd positions.
+    CHECK(cells_under(SubCell{10, 20}, kLightSub) == Rect{5, 10, 2, 2});
+    CHECK(cells_under(SubCell{11, 21}, kLightSub) == Rect{5, 10, 2, 2});
+    // A heavy tower (6) covers 3 cells at an even position and 4 at an odd one.
+    CHECK(cells_under(SubCell{10, 10}, kHeavySub) == Rect{5, 5, 3, 3});
+    CHECK(cells_under(SubCell{11, 11}, kHeavySub) == Rect{5, 5, 4, 4});
+    // The core (9) always covers 5.
+    CHECK(cells_under(SubCell{10, 10}, kCoreSub) == Rect{5, 5, 5, 5});
+    CHECK(cells_under(SubCell{11, 10}, kCoreSub) == Rect{5, 5, 5, 5});
+}
+
+TEST_CASE("a placement is refused if any cell under it is bad") {
+    const GenParams p;
+    Map m = make_fallback_map(1, p);                       // flat at height 100
+    CHECK(placement_ok(m, SubCell{21, 21}, kLightSub, p)); // covers cells 10..11
+    m.formation.at(12, 12) = 1;                            // just outside it
+    m.height.at(12, 12) = 240;
+    CHECK(placement_ok(m, SubCell{21, 21}, kLightSub, p));
+    CHECK_FALSE(placement_ok(m, SubCell{22, 22}, kLightSub, p)); // now covers cell 12, 12
+    m.height.at(30, 30) = static_cast<std::uint8_t>(100 + p.flat_limit + 1);
+    CHECK_FALSE(placement_ok(m, SubCell{58, 58}, kHeavySub, p)); // cells 29..31
+    CHECK(placement_ok(m, SubCell{50, 50}, kHeavySub, p));
+    CHECK_FALSE(placement_ok(m, SubCell{-1, 5}, kLightSub, p));        // off the subgrid
+    CHECK_FALSE(placement_ok(m, SubCell{kSubW - 2, 5}, kLightSub, p)); // hangs off the map
+    CHECK(placement_ok(m, SubCell{kSubW - 3, 5}, kLightSub, p));
 }
 
 TEST_CASE("walking distance goes around cliffs") {
     const GenParams p;
     Map m = make_fallback_map(1, p);
-    const Cell core = *m.core;
+    const Rect core = cells_under(*m.core, kCoreSub); // the cells the core covers
     // A cliff wall (a raised ring) all round the core, 3 cells out: nothing outside can reach it.
-    for (int y = core.y - 4; y <= core.y + kCoreSize + 3; ++y) {
-        for (int x = core.x - 4; x <= core.x + kCoreSize + 3; ++x) {
-            const bool ring = y == core.y - 4 || y == core.y + kCoreSize + 3 || x == core.x - 4 ||
-                              x == core.x + kCoreSize + 3;
+    for (int y = core.y - 4; y <= core.y + core.h + 3; ++y) {
+        for (int x = core.x - 4; x <= core.x + core.w + 3; ++x) {
+            const bool ring = y == core.y - 4 || y == core.y + core.h + 3 || x == core.x - 4 ||
+                              x == core.x + core.w + 3;
             if (ring) {
                 m.height.at(x, y) = 180;
             }
@@ -175,14 +204,14 @@ TEST_CASE("walking distance goes around cliffs") {
     CHECK(dist.at(core.x - 1, core.y) == 0);
     CHECK(dist.at(core.x - 3, core.y) == 2);
     CHECK(dist.at(0, 0) < 0);
-    CHECK(dist.at(core) < 0); // the core's own cells aren't walked
+    CHECK(dist.at(core.x, core.y) < 0); // the core's own cells aren't walked
 }
 
 TEST_CASE("the fallback map is valid") {
     const GenParams p;
     const Map m = make_fallback_map(99, p);
     REQUIRE(m.core.has_value());
-    CHECK(footprint_ok(m, *m.core, kCoreSize, p));
+    CHECK(placement_ok(m, *m.core, kCoreSub, p));
     const Grid<int> dist = walk_distance_to_core(m, p);
     REQUIRE(m.spawns.size() == p.spawn_waves.size());
     for (const Spawn& s : m.spawns) {
@@ -227,7 +256,10 @@ TEST_CASE("map stats (manual)" * doctest::skip()) {
             for (int x = 0; x < kMapW; ++x) {
                 formation += m.formation.at(x, y) != 0 ? 1 : 0;
                 cliff += is_cliff_cell(m, {x, y}, p) ? 1 : 0;
-                buildable += x % 2 == 0 && y % 2 == 0 && footprint_ok(m, {x, y}, 2, p) ? 1 : 0;
+                buildable +=
+                    x % 2 == 0 && y % 2 == 0 && placement_ok(m, SubCell{x * 2, y * 2}, kLightSub, p)
+                        ? 1
+                        : 0;
             }
         }
     }

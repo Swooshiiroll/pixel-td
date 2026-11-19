@@ -25,12 +25,25 @@ struct PointPx {
     friend constexpr bool operator==(PointPx, PointPx) = default;
 };
 
-// The centre of a cell, and of a square footprint whose top-left cell is `top_left`.
+// The centre of a cell, and of a square subcell footprint (towers, the core) whose top-left
+// subcell is `top_left`. A 3x3 light tower's centre is the middle of its middle subcell.
 [[nodiscard]] constexpr PointPx centre_of(Cell c) noexcept {
     return {c.x * kCellPx + kCellPx / 2, c.y * kCellPx + kCellPx / 2};
 }
-[[nodiscard]] constexpr PointPx centre_of(Cell top_left, int size) noexcept {
-    return {top_left.x * kCellPx + size * kCellPx / 2, top_left.y * kCellPx + size * kCellPx / 2};
+[[nodiscard]] constexpr PointPx centre_of(SubCell top_left, int size_sub) noexcept {
+    return {top_left.x * kSubPx + size_sub * kSubPx / 2,
+            top_left.y * kSubPx + size_sub * kSubPx / 2};
+}
+
+// The pixel rectangle of a subcell footprint.
+struct RectPx {
+    int x = 0;
+    int y = 0;
+    int w = 0;
+    int h = 0;
+};
+[[nodiscard]] constexpr RectPx rect_of(SubCell top_left, int size_sub) noexcept {
+    return {top_left.x * kSubPx, top_left.y * kSubPx, size_sub * kSubPx, size_sub * kSubPx};
 }
 
 // The ground height under a world-pixel position (the height of the cell it's in).

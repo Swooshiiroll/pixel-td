@@ -42,8 +42,8 @@ struct Map {
     Grid<Material> material{kMapW, kMapH, Material::Dust};
     Grid<std::uint8_t> formation{kMapW, kMapH, 0};
 
-    Rect core_area{};         // where the seed may put the core: the central third
-    std::optional<Cell> core; // top-left of the 6x6 core
+    Rect core_area{};            // cells the core must lie in: the central third
+    std::optional<SubCell> core; // top-left subcell of the 9x9-subcell (72 px) core
     std::vector<Spawn> spawns;
 
     GenStats stats{};

@@ -137,6 +137,54 @@ bool shares_ok(const Map& map, const GenParams& p) {
            cliff * 100 <= p.cliff_share_max_pct * kCellCount;
 }
 
+// Every core spot on the subgrid whose cells all lie in the core area and pass placement_ok, in
+// row order. The same result as calling placement_ok for each, but each cell's formation and
+// cliff test runs once, and each block of cells is tested once (a 9-subcell side always covers 5
+// cells, so neighbouring subcell positions share blocks).
+std::vector<SubCell> core_spots(const Map& map, const GenParams& p) {
+    static_assert(cells_under(SubCell{0, 0}, kCoreSub).w == cells_under(SubCell{1, 1}, kCoreSub).w,
+                  "the core must cover the same number of cells at every alignment");
+    constexpr int kBlock = cells_under(SubCell{0, 0}, kCoreSub).w;
+    const Rect& a = p.core_area;
+    Mask bad(kMapW, kMapH, 0); // formation or cliff, inside the core area
+    for (int y = a.y; y < a.y + a.h; ++y) {
+        for (int x = a.x; x < a.x + a.w; ++x) {
+            bad.at(x, y) = is_formation(map, {x, y}) || is_cliff_cell(map, {x, y}, p) ? 1 : 0;
+        }
+    }
+    Grid<std::int8_t> block_ok(kMapW, kMapH, -1); // by top-left cell; -1 = not tested yet
+    const auto test_block = [&](int bx, int by) {
+        int lo = 255;
+        int hi = 0;
+        for (int y = by; y < by + kBlock; ++y) {
+            for (int x = bx; x < bx + kBlock; ++x) {
+                if (bad.at(x, y) != 0) {
+                    return false;
+                }
+                lo = std::min(lo, static_cast<int>(map.height.at(x, y)));
+                hi = std::max(hi, static_cast<int>(map.height.at(x, y)));
+            }
+        }
+        return hi - lo <= p.flat_limit;
+    };
+    std::vector<SubCell> spots;
+    const int sx_end = (a.x + a.w) * kSubPerCell;
+    const int sy_end = (a.y + a.h) * kSubPerCell;
+    for (int y = a.y * kSubPerCell; y + kCoreSub <= sy_end; ++y) {
+        for (int x = a.x * kSubPerCell; x + kCoreSub <= sx_end; ++x) {
+            const Rect cells = cells_under(SubCell{x, y}, kCoreSub);
+            std::int8_t& ok = block_ok.at(cells.x, cells.y);
+            if (ok < 0) {
+                ok = test_block(cells.x, cells.y) ? 1 : 0;
+            }
+            if (ok != 0) {
+                spots.push_back(SubCell{x, y});
+            }
+        }
+    }
+    return spots;
+}
+
 // A spawn's 2x2 block: no formation, reachable, walkable within itself, and far enough away.
 bool spawn_spot_ok(const Map& map, const Grid<int>& dist, Cell s, const GenParams& p) {
     for (int y = s.y; y < s.y + 2; ++y) {
@@ -201,7 +249,7 @@ Grid<int> walk_distance_to_core(const Map& map, const GenParams& p) {
     if (!map.core) {
         return dist;
     }
-    const Rect core{map.core->x, map.core->y, kCoreSize, kCoreSize};
+    const Rect core = cells_under(*map.core, kCoreSub); // the cells the core covers
     // Sources: the cells around the core that enemies reach it from.
     std::vector<Cell> queue;
     for (int y = core.y - 1; y <= core.y + core.h; ++y) {
@@ -234,8 +282,8 @@ Map make_fallback_map(std::uint64_t seed, const GenParams& p) {
     map.seed = seed;
     map.height.fill(100);
     map.core_area = p.core_area;
-    map.core = Cell{p.core_area.x + (p.core_area.w - kCoreSize) / 2,
-                    p.core_area.y + (p.core_area.h - kCoreSize) / 2};
+    map.core = SubCell{p.core_area.x * kSubPerCell + (p.core_area.w * kSubPerCell - kCoreSub) / 2,
+                       p.core_area.y * kSubPerCell + (p.core_area.h * kSubPerCell - kCoreSub) / 2};
     const Cell corners[3] = {{0, 0}, {kMapW - 2, kMapH - 2}, {0, kMapH - 2}};
     for (std::size_t i = 0; i < p.spawn_waves.size() && i < 3; ++i) {
         map.spawns.push_back({corners[i], true, p.spawn_waves[i]});
@@ -256,16 +304,7 @@ Map generate_map(std::uint64_t seed, const GenParams& p, GenLayers* layers) {
         if (!shares_ok(map, p)) {
             continue;
         }
-        // The core: a seeded pick among the buildable 6x6 spots in the core area.
-        std::vector<Cell> spots;
-        const Rect& a = p.core_area;
-        for (int y = a.y; y + kCoreSize <= a.y + a.h; ++y) {
-            for (int x = a.x; x + kCoreSize <= a.x + a.w; ++x) {
-                if (footprint_ok(map, {x, y}, kCoreSize, p)) {
-                    spots.push_back({x, y});
-                }
-            }
-        }
+        std::vector<SubCell> spots = core_spots(map, p);
         shuffle(spots, rng);
         const std::size_t tries = std::min(spots.size(), static_cast<std::size_t>(p.core_tries));
         for (std::size_t t = 0; t < tries; ++t) {

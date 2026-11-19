@@ -99,8 +99,9 @@ TEST_CASE("the shooter's and the target's own cells never block") {
     Range r;
     r.map.height.at(20, 10) = 180; // the target stands on a peak
     CHECK(clear_shot(r.map, r.from, r.to, Shot::Direct, r.p));
-    // A light tower's centre sits on the corner of its flat 2x2 footprint.
-    const PointPx tower = centre_of(Cell{10, 10}, kLightSize);
+    // A light tower's centre is the middle of its 3x3 subcells.
+    const PointPx tower = centre_of(SubCell{20, 20}, kLightSub);
+    CHECK(tower == PointPx{20 * kSubPx + 12, 20 * kSubPx + 12});
     CHECK(clear_shot(r.map, tower, centre_of(Cell{0, 0}), Shot::Direct, r.p));
 }
 

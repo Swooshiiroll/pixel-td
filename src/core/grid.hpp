@@ -6,24 +6,39 @@
 
 namespace pixeltd {
 
-// The world sits on a hidden grid of 12 px cells (design/world.md): 320 x 180 cells, 3840 x 2160
-// px. The terrain is drawn seamless; the grid is for placement and pathfinding.
-inline constexpr int kCellPx = 12;
+// The world sits on a hidden grid of 16 px cells (design/world.md): 320 x 180 cells, 5120 x 2880
+// px. The terrain is drawn seamless; the cells are for terrain, line of sight and pathfinding.
+inline constexpr int kCellPx = 16;
 inline constexpr int kMapW = 320;
 inline constexpr int kMapH = 180;
 inline constexpr int kMapPxW = kMapW * kCellPx;
 inline constexpr int kMapPxH = kMapH * kCellPx;
 
-// Footprints, in cells: light tower 24 px, heavy tower 48 px, core 72 px.
-inline constexpr int kLightSize = 2;
-inline constexpr int kHeavySize = 4;
-inline constexpr int kCoreSize = 6;
+// Towers and the core snap to a placement subgrid of 8 px subcells, two per cell each way.
+inline constexpr int kSubPx = 8;
+inline constexpr int kSubPerCell = kCellPx / kSubPx;
+inline constexpr int kSubW = kMapW * kSubPerCell; // 640
+inline constexpr int kSubH = kMapH * kSubPerCell; // 360
 
+// Footprints, in subcells: light tower 24 px, heavy tower 48 px, core 72 px.
+inline constexpr int kLightSub = 3;
+inline constexpr int kHeavySub = 6;
+inline constexpr int kCoreSub = 9;
+
+// A cell of the hidden grid (16 px).
 struct Cell {
     int x = 0;
     int y = 0;
 
     friend constexpr bool operator==(Cell, Cell) = default;
+};
+
+// A subcell of the placement subgrid (8 px). A separate type so the two can't be mixed up.
+struct SubCell {
+    int x = 0;
+    int y = 0;
+
+    friend constexpr bool operator==(SubCell, SubCell) = default;
 };
 
 struct Rect {

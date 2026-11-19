@@ -7,6 +7,7 @@
 #include <doctest/doctest.h>
 
 #include "core/mapgen.hpp"
+#include "core/terrain.hpp"
 
 using namespace pixeltd;
 
@@ -30,15 +31,21 @@ void fill(Map& m, Rect r, int height) {
 TEST_CASE("run start explores the ground around the core") {
     const GenParams p;
     Map m = make_fallback_map(1, p);
-    m.core = Cell{150, 80};
+    m.core = SubCell{300, 160}; // px 2400..2472 x 1280..1352, cells 150..154 x 80..84
     Fog fog;
-    const Rect box = fog.explore_core(m, 6);
-    CHECK(fog.explored({150, 80}));               // the core itself
-    CHECK(fog.explored({150 - 6, 82}));           // 6 cells left of it
-    CHECK_FALSE(fog.explored({150 - 7, 82}));     // 7 cells left
-    CHECK_FALSE(fog.explored({150 - 5, 80 - 5})); // diagonally 7.1 cells away
+    const Rect box = fog.explore_core(m, 72);
+    CHECK(fog.explored({150, 80})); // under the core
+    CHECK(fog.explored({154, 84}));
+    // Left: cell 146's centre is 2344, 56 px from the core's edge; cell 145's is 72 px (still in);
+    // cell 144's is 88 px.
+    CHECK(fog.explored({146, 82}));
+    CHECK(fog.explored({145, 82}));
+    CHECK_FALSE(fog.explored({144, 82}));
+    // Diagonally: cell (146, 76) is 56 px left and 56 px up, 79 px away.
+    CHECK_FALSE(fog.explored({146, 76}));
+    CHECK(fog.explored({147, 77})); // 40 and 40: 57 px
     CHECK_FALSE(fog.explored({10, 10}));
-    CHECK(box.contains(Rect{144, 74, 18, 18}));
+    CHECK(box.contains(Rect{146, 76, 13, 13}));
 }
 
 TEST_CASE("towers explore what they can see over the terrain") {
@@ -104,10 +111,11 @@ TEST_CASE("a real map: the core's surroundings are explored and the spawns hidde
         CAPTURE(seed);
         const Map m = generate_map(seed, p);
         Fog fog;
-        fog.explore_core(m, p.light_range_cells);
+        fog.explore_core(m, p.light_range_px);
         REQUIRE(m.core.has_value());
-        CHECK(fog.explored(*m.core));
-        CHECK(fog.explored({m.core->x - 1, m.core->y}));
+        const Rect core = cells_under(*m.core, kCoreSub);
+        CHECK(fog.explored({core.x, core.y}));
+        CHECK(fog.explored({core.x - 1, core.y}));
         for (const Spawn& s : m.spawns) {
             CHECK_FALSE(fog.spawn_found(s));
         }
@@ -128,10 +136,10 @@ TEST_CASE("generation bench (manual)" * doctest::skip()) {
         const Map m = generate_map(seed, p);
         const auto t1 = clock::now();
         Fog fog;
-        fog.explore_core(m, p.light_range_cells);
+        fog.explore_core(m, p.light_range_px);
         for (int i = 0; i < 8; ++i) {
-            const Cell c{m.core->x - 20 + 6 * i, m.core->y + 10};
-            fog.explore_from(m, centre_of(c, kLightSize), p.light_range_cells * kCellPx, p);
+            const SubCell c{m.core->x - 40 + 12 * i, m.core->y + 20};
+            fog.explore_from(m, centre_of(c, kLightSub), p.light_range_px, p);
         }
         const auto t2 = clock::now();
         const double g = std::chrono::duration<double, std::milli>(t1 - t0).count();

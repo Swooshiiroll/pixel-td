@@ -26,7 +26,7 @@ std::uint64_t hash_map(const Map& m) {
             mix(m.formation.at(x, y));
         }
     }
-    mix(m.core ? static_cast<std::uint64_t>(m.core->x * 1000 + m.core->y) : 0u);
+    mix(m.core ? static_cast<std::uint64_t>(m.core->x * 1000 + m.core->y) : 0u); // subcells
     for (const Spawn& s : m.spawns) {
         mix(static_cast<std::uint64_t>(s.cell.x * 1000 + s.cell.y));
         mix(static_cast<std::uint64_t>(s.opens_at_wave));

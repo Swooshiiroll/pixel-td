@@ -22,9 +22,9 @@ class Fog {
     // Developer tool (map shots): everything explored.
     void explore_all() { explored_.fill(1); }
 
-    // At run start: every cell within `range_cells` of the nearest core cell (cell centres,
-    // Euclidean). Returns the bounding box of the cells explored.
-    Rect explore_core(const Map& map, int range_cells);
+    // At run start: every cell whose centre is within `range_px` of the core's footprint
+    // (Euclidean, to its nearest point). Returns the bounding box of the cells explored.
+    Rect explore_core(const Map& map, int range_px);
 
     // A viewer (tower or probe) standing at `centre` with base range `base_px` explores every cell
     // within its reach for that cell's height (effective_range) that it can see. Returns the
