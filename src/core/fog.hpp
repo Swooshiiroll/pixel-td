@@ -27,8 +27,8 @@ class Fog {
     Rect explore_core(const Map& map, int range_px);
 
     // A viewer (tower or probe) standing at `centre` with base range `base_px` explores every cell
-    // within its reach for that cell's height (effective_range) that it can see. Returns the
-    // bounding box of newly explored cells (empty if none).
+    // within its reach for that cell's ground (in_reach: range by grade) that it can see. Returns
+    // the bounding box of newly explored cells (empty if none).
     Rect explore_from(const Map& map, PointPx centre, int base_px, const GenParams& p);
 
     [[nodiscard]] bool explored(Cell c) const noexcept {

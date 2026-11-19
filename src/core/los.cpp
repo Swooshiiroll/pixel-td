@@ -11,11 +11,37 @@ int ground_at(const Map& map, PointPx p) noexcept {
     return map.height.at(cx, cy);
 }
 
-int effective_range(int base_px, int tower_ground, int target_ground, const GenParams& p) noexcept {
-    // Downhill the bonus grows with the drop, with no cap; uphill the penalty has a floor.
-    const int pct = std::max((tower_ground - target_ground) * p.range_pct_per_10 / 10,
-                             -p.range_penalty_max_pct);
+int isqrt(long long v) noexcept {
+    if (v <= 0) {
+        return 0;
+    }
+    // Newton's method on integers, from an estimate above the root.
+    long long r = v;
+    long long next = (r + 1) / 2;
+    while (next < r) {
+        r = next;
+        next = (r + v / r) / 2;
+    }
+    return static_cast<int>(r);
+}
+
+int effective_range(int base_px, int tower_ground, int target_ground, int distance_px,
+                    const GenParams& p) noexcept {
+    // pct = grade * pct_per_grade, with grade = fall * 16 / distance: one division, so it
+    // rounds once (towards zero).
+    const long long fall = tower_ground - target_ground;
+    const long long dist = std::max(distance_px, kCellPx);
+    const long long raw = fall * kCellPx * p.range_pct_per_grade / dist;
+    const long long cap = p.range_slope_max_pct;
+    const int pct = static_cast<int>(std::clamp(raw, -cap, cap));
     return base_px * (100 + pct) / 100;
+}
+
+bool in_reach(int base_px, int tower_ground, int target_ground, long long dx, long long dy,
+              const GenParams& p) noexcept {
+    const long long d2 = dx * dx + dy * dy;
+    const long long r = effective_range(base_px, tower_ground, target_ground, isqrt(d2), p);
+    return d2 <= r * r;
 }
 
 bool clear_shot(const Map& map, PointPx from, PointPx to, Shot shot, const GenParams& p) noexcept {

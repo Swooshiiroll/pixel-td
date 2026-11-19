@@ -77,8 +77,8 @@ constexpr std::array<Entry, 27> kInts = {{
     {"Towers, sight and range", {"light_range_px", &GenParams::light_range_px}},
     {nullptr, {"eye_height", &GenParams::eye_height}},
     {nullptr, {"target_height", &GenParams::target_height}},
-    {nullptr, {"range_pct_per_10", &GenParams::range_pct_per_10}},
-    {nullptr, {"range_penalty_max_pct", &GenParams::range_penalty_max_pct}},
+    {nullptr, {"range_pct_per_grade", &GenParams::range_pct_per_grade}},
+    {nullptr, {"range_slope_max_pct", &GenParams::range_slope_max_pct}},
     {"Retries", {"attempts", &GenParams::attempts}},
 }};
 

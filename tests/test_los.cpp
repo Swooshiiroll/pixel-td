@@ -105,16 +105,60 @@ TEST_CASE("the shooter's and the target's own cells never block") {
     CHECK(clear_shot(r.map, tower, centre_of(Cell{0, 0}), Shot::Direct, r.p));
 }
 
-TEST_CASE("range grows with height above the target and shrinks uphill") {
-    const GenParams p; // +5% per 10 units, no cap downhill, at worst -25% uphill
+TEST_CASE("range follows the grade between tower and target, not the altitude") {
+    const GenParams p; // 10% per unit of fall per cell, at most +-50%
     const int base = 72;
-    CHECK(effective_range(base, 100, 100, p) == 72);
-    CHECK(effective_range(base, 120, 100, p) == 72 * 110 / 100);
-    CHECK(effective_range(base, 200, 100, p) == 72 * 150 / 100); // 100 above: +50%
-    CHECK(effective_range(base, 200, 0, p) == 72 * 200 / 100);   // 200 above: +100%, no cap
-    CHECK(max_reach(base, 150, p) == effective_range(base, 150, 0, p));
-    CHECK(effective_range(base, 100, 120, p) == 72 * 90 / 100); // uphill
-    CHECK(effective_range(base, 0, 200, p) == 72 * 75 / 100);   // floored
+    const int four_cells = 4 * kCellPx;
+    // Flat ground: the base range at any altitude.
+    CHECK(effective_range(base, 50, 50, four_cells, p) == 72);
+    CHECK(effective_range(base, 180, 180, four_cells, p) == 72);
+    // Downhill: a fall of 10 over 4 cells (grade 2.5) is +25%; 20 over 4 cells (grade 5) is +50%.
+    CHECK(effective_range(base, 110, 100, four_cells, p) == 72 * 125 / 100);
+    CHECK(effective_range(base, 120, 100, four_cells, p) == 72 * 150 / 100);
+    // Uphill: the same, shorter.
+    CHECK(effective_range(base, 100, 110, four_cells, p) == 72 * 75 / 100);
+    CHECK(effective_range(base, 100, 120, four_cells, p) == 72 * 50 / 100);
+    // Both ways the change is capped at 50%, however steep.
+    CHECK(effective_range(base, 200, 0, four_cells, p) == 72 * 150 / 100);
+    CHECK(effective_range(base, 0, 200, four_cells, p) == 72 * 50 / 100);
+    // The same fall over twice the distance is half the grade (12.5% rounds towards zero: 12%).
+    CHECK(effective_range(base, 110, 100, 8 * kCellPx, p) == 72 * 112 / 100);
+    // Under one cell counts as one cell.
+    CHECK(effective_range(base, 102, 100, 3, p) == effective_range(base, 102, 100, kCellPx, p));
+    CHECK(max_reach(base, p) == 72 * 150 / 100);
+}
+
+TEST_CASE("in reach: ovals on slopes, circles on flat ground at any height") {
+    const GenParams p;
+    const int base = 72;
+    // Flat at two altitudes: exactly the base range, a circle.
+    for (const int h : {40, 190}) {
+        CHECK(in_reach(base, h, h, 72, 0, p));
+        CHECK_FALSE(in_reach(base, h, h, 73, 0, p));
+        CHECK(in_reach(base, h, h, 50, 50, p)); // 70.7 px
+        CHECK_FALSE(in_reach(base, h, h, 51, 51, p));
+    }
+    // A slope falling 2 units per cell eastwards: east (downhill) reaches further than west.
+    const auto ground_at_dx = [](long long dx) { return static_cast<int>(100 - 2 * dx / kCellPx); };
+    // 80 px east falls 10 (grade 2): +20%, 86 px, so it's in reach though past the 72 px base;
+    // 80 px west climbs 10: -20%, 57 px, out of reach.
+    const long long east = 80;
+    CHECK(in_reach(base, 100, ground_at_dx(east), east, 0, p));
+    CHECK_FALSE(in_reach(base, 100, ground_at_dx(-east), -east, 0, p));
+    CHECK(in_reach(base, 100, ground_at_dx(-57), -57, 0, p)); // -20% leaves 57
+}
+
+TEST_CASE("integer square root") {
+    CHECK(isqrt(0) == 0);
+    CHECK(isqrt(-5) == 0);
+    CHECK(isqrt(1) == 1);
+    CHECK(isqrt(2) == 1);
+    CHECK(isqrt(15) == 3);
+    CHECK(isqrt(16) == 4);
+    CHECK(isqrt(17) == 4);
+    CHECK(isqrt(1000000) == 1000);
+    CHECK(isqrt(999999) == 999);
+    CHECK(isqrt(3000000000LL) == 54772);
 }
 
 TEST_CASE("ground height under a point") {

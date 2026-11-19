@@ -61,15 +61,25 @@ struct RectPx {
     return clear_shot(map, from, to, Shot::Direct, p);
 }
 
-// A tower's range (world pixels) against a target, from its base range and the two ground heights:
-// +range_pct_per_10 % per 10 units it stands above the target, growing with the drop (no cap),
-// and the same reduction uphill, down to -range_penalty_max_pct.
-[[nodiscard]] int effective_range(int base_px, int tower_ground, int target_ground,
+// The integer square root: the largest r with r * r <= v (0 for v <= 0).
+[[nodiscard]] int isqrt(long long v) noexcept;
+
+// Range by grade (design/world.md, Line of sight and range; #27). The reach depends on how the
+// ground falls or rises between a tower and its target, not on how high the tower stands:
+// - the grade is the fall per cell, (tower_ground - target_ground) * 16 / distance_px height units
+//   (a distance under one cell counts as one cell), positive downhill;
+// - the range changes by grade * range_pct_per_grade %, at most +-range_slope_max_pct.
+// Flat ground at any altitude gives the base range. Integer maths only.
+[[nodiscard]] int effective_range(int base_px, int tower_ground, int target_ground, int distance_px,
                                   const GenParams& p) noexcept;
 
-// The farthest a tower on `tower_ground` could reach: its range against a target at height 0.
-[[nodiscard]] inline int max_reach(int base_px, int tower_ground, const GenParams& p) noexcept {
-    return effective_range(base_px, tower_ground, 0, p);
+// True if a target (dx, dy) world pixels from the tower is within its reach for those grounds.
+[[nodiscard]] bool in_reach(int base_px, int tower_ground, int target_ground, long long dx,
+                            long long dy, const GenParams& p) noexcept;
+
+// The farthest any target can be: the base range stretched by the full downhill bonus.
+[[nodiscard]] inline int max_reach(int base_px, const GenParams& p) noexcept {
+    return base_px * (100 + p.range_slope_max_pct) / 100;
 }
 
 } // namespace pixeltd

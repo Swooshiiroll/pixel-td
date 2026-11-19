@@ -67,9 +67,11 @@ TEST_CASE("towers explore what they can see over the terrain") {
         fog.explore_from(m, tower, base, p);
         // (The ground right at the plateau's foot is dead ground: the edge hides it.)
         CHECK(fog.explored({17, 10}));
-        // 60 units above the ground beyond: +30% reach, so 10 cells (8 * 1.3 = 10.4).
+        // A fall of 60 off the plateau: the grade (60 over 12 cells is 5 per cell) caps the stretch
+        // at +50%, so 12 cells reach; at 13 cells the grade drops (+46%, 11.6 cells).
         CHECK(fog.explored({20, 10}));
-        CHECK_FALSE(fog.explored({22, 10}));
+        CHECK(fog.explored({22, 10}));
+        CHECK_FALSE(fog.explored({23, 10}));
     }
     SUBCASE("rock formations block high ground too") {
         fill(m, {9, 9, 3, 3}, 160);
