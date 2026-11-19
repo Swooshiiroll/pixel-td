@@ -2,9 +2,12 @@
 // where the scale is a whole number, then shown at that scale: pixels stay square and crisp at
 // every zoom step, and the view always fills the window (design/world.md, Camera).
 //
-//   PixelTD [--seed N] [--probe X,Y]... [--map-shot file.bmp] [--frames N] [--screenshot file.bmp]
+//   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--map-shot file.bmp] [--frames N]
+//           [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at cell X,Y (repeatable)
+//     --overlay NAME    developer tool: start in an overlay: elevation, octave1, octave2, octave3,
+//                       height, mesa, rough or material (issue #13)
 //     --map-shot F      developer tool: save the whole 3840x2160 map to F (BMP), then exit. With
 //                       no probes everything is shown explored; with probes, the fog is shown.
 //     --frames N        quit after N frames (smoke tests)
@@ -12,13 +15,15 @@
 //
 // Controls: pan with WASD / arrows / the window edges / right-drag; zoom with the mouse wheel or
 // + and -; P toggles probe placement and a left-click places one (developer tools: a probe is a
-// light tower's sight and reach, to try out line of sight and fog); F5 makes a new random map
-// (developer tool); Esc quits.
+// light tower's sight and reach, to try out line of sight and fog); O / Shift+O step through the
+// overlays (elevation and the generator's noise layers); F5 makes a new random map (developer
+// tools); Esc quits.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +39,7 @@
 #include "core/los.hpp"
 #include "core/map.hpp"
 #include "core/mapgen.hpp"
+#include "core/overlay.hpp"
 #include "core/terrain.hpp"
 #include "game/map_view.hpp"
 
@@ -55,6 +61,7 @@ struct Options {
     bool has_seed = false;
     std::uint64_t seed = 0;
     std::vector<Cell> probes;
+    Overlay overlay = Overlay::Off;
 };
 
 // Parses "X,Y" into a cell. False on anything else.
@@ -97,9 +104,15 @@ bool parse_options(int argc, char** argv, Options& out) {
                 return false;
             }
             out.probes.push_back(c);
+        } else if (std::strcmp(argv[i], "--overlay") == 0 && has_value) {
+            if (!parse_overlay(argv[++i], out.overlay)) {
+                std::fprintf(stderr, "--overlay takes elevation, octave1, octave2, octave3, "
+                                     "height, mesa, rough or material\n");
+                return false;
+            }
         } else {
-            std::fprintf(stderr, "usage: PixelTD [--seed N] [--probe X,Y]... [--map-shot file.bmp] "
-                                 "[--frames N] [--screenshot file.bmp]\n");
+            std::fprintf(stderr, "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
+                                 "[--map-shot file.bmp] [--frames N] [--screenshot file.bmp]\n");
             return false;
         }
     }
@@ -114,6 +127,7 @@ std::uint64_t random_seed() {
 struct World {
     Map map;
     GenParams params;
+    GenLayers layers; // the noise behind the map, for the overlays
     Fog fog;
     std::vector<Cell> probes; // top-left cells of placed probes (2x2, like a light tower)
     double gen_ms = 0.0;
@@ -152,13 +166,13 @@ bool place_probe(World& world, MapView& view, Cell top_left) {
 
 bool new_map(World& world, MapView& view, std::uint64_t seed) {
     const Uint64 start = SDL_GetTicksNS();
-    world.map = generate_map(seed, world.params);
+    world.map = generate_map(seed, world.params, &world.layers);
     world.gen_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
     world.probes.clear();
     world.fog.reset();
     world.fog.explore_core(world.map, world.params.light_range_cells);
     const Map& m = world.map;
-    const bool ok = view.set_map(m, world.fog);
+    const bool ok = view.set_map(m, world.layers, world.fog);
     SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
             "%d,%d; %zu spawns",
             static_cast<unsigned long long>(seed), world.gen_ms, m.stats.attempts,
@@ -248,7 +262,52 @@ void zoom_by(SDL_Renderer* r, Screen& s, CameraPos& cam, int delta, int px, int 
     cam = clamp_camera(zoom_about(cam, old_scale, s.scale, px, py), s.view);
 }
 
-void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover, bool probe_mode) {
+// The overlay's value under the cursor, for the HUD's second line.
+void describe_overlay(const World& world, Overlay overlay, Cell hover, char* out, std::size_t n) {
+    const GenLayers& L = world.layers;
+    const Map& m = world.map;
+    if (!m.height.in_bounds(hover)) {
+        std::snprintf(out, n, "view: %s", overlay_label(overlay));
+        return;
+    }
+    if (overlay == Overlay::Elevation) {
+        std::snprintf(out, n, "view: %s  height %d", overlay_label(overlay), m.height.at(hover));
+        return;
+    }
+    if (!L.valid) {
+        std::snprintf(out, n, "view: %s  fallback map: no noise", overlay_label(overlay));
+        return;
+    }
+    int value = 0;
+    switch (overlay) {
+    case Overlay::Octave1:
+        value = L.octave[0].at(hover);
+        break;
+    case Overlay::Octave2:
+        value = L.octave[1].at(hover);
+        break;
+    case Overlay::Octave3:
+        value = L.octave[2].at(hover);
+        break;
+    case Overlay::Height:
+        value = L.height_sum.at(hover);
+        break;
+    case Overlay::Mesa:
+        value = L.mesa_noise.at(hover);
+        break;
+    case Overlay::Rough:
+        value = L.rough.at(hover);
+        break;
+    default:
+        value = L.material.at(hover);
+        break;
+    }
+    std::snprintf(out, n, "view: %s  value %d%s", overlay_label(overlay), value,
+                  overlay == Overlay::Mesa && L.mesa.at(hover) != 0 ? " (terraced)" : "");
+}
+
+void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover, bool probe_mode,
+              Overlay overlay) {
     char line[192];
     char ground[64] = "";
     const Map& m = world.map;
@@ -265,19 +324,27 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, Cell hover, 
                   static_cast<unsigned long long>(m.seed), s.scale, s.view.w, s.view.h,
                   world.gen_ms, hover.x, hover.y, ground,
                   probe_mode ? "  [PROBE: click to place]" : "");
-    const SDL_FRect strip{0.0f, 0.0f, static_cast<float>(s.view.w), 10.0f};
+    const bool second = overlay != Overlay::Off;
+    const SDL_FRect strip{0.0f, 0.0f, static_cast<float>(s.view.w), second ? 20.0f : 10.0f};
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
     SDL_RenderFillRect(r, &strip);
     SDL_SetRenderDrawColor(r, 170, 236, 210, 255);
     SDL_RenderDebugText(r, 2.0f, 1.0f, line);
+    if (second) {
+        char view[128];
+        describe_overlay(world, overlay, hover, view, sizeof view);
+        SDL_SetRenderDrawColor(r, 255, 220, 140, 255);
+        SDL_RenderDebugText(r, 2.0f, 11.0f, view);
+    }
 }
 
 // Developer tool: renders the whole map once into a 3840x2160 target and saves it.
 int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const std::vector<Cell>& probes,
-                 const char* path) {
+                 Overlay overlay, const char* path) {
     World world;
     MapView view(r);
+    view.set_overlay(overlay, world.map, world.layers, world.fog); // applied by the first bake
     if (!new_map(world, view, seed)) {
         return 1;
     }
@@ -342,7 +409,8 @@ int main(int argc, char** argv) {
 
     const std::uint64_t first_seed = opts.has_seed ? opts.seed : random_seed();
     if (opts.map_shot != nullptr) {
-        const int code = run_map_shot(renderer, first_seed, opts.probes, opts.map_shot);
+        const int code =
+            run_map_shot(renderer, first_seed, opts.probes, opts.overlay, opts.map_shot);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -354,6 +422,7 @@ int main(int argc, char** argv) {
         World world;
         MapView view(renderer);
         Screen screen;
+        view.set_overlay(opts.overlay, world.map, world.layers, world.fog); // before the bake
         if (!new_map(world, view, first_seed) || !refresh_screen(renderer, screen)) {
             exit_code = 1;
         }
@@ -394,6 +463,12 @@ int main(int argc, char** argv) {
                         cam = centred_on(core_rect(world.map), screen.view);
                     } else if (e.key.key == SDLK_P) {
                         probe_mode = !probe_mode;
+                    } else if (e.key.key == SDLK_O) {
+                        const int dir = (e.key.mod & SDL_KMOD_SHIFT) != 0 ? -1 : 1;
+                        view.set_overlay(step_overlay(view.overlay(), dir), world.map, world.layers,
+                                         world.fog);
+                        SDL_Log("overlay: %s (baked in %.1f ms)", overlay_label(view.overlay()),
+                                view.bake_ms());
                     } else if (e.key.key == SDLK_EQUALS || e.key.key == SDLK_KP_PLUS) {
                         zoom_by(renderer, screen, cam, 1, screen.out_w / 2, screen.out_h / 2);
                     } else if (e.key.key == SDLK_MINUS || e.key.key == SDLK_KP_MINUS) {
@@ -506,7 +581,7 @@ int main(int argc, char** argv) {
                 view.draw_probe_preview(cam, world.map, world.params, hover,
                                         probe_fits(world, hover), world.probe_range_px());
             }
-            draw_hud(renderer, world, screen, hover, probe_mode);
+            draw_hud(renderer, world, screen, hover, probe_mode, view.overlay());
 
             ++frame;
             const bool last_frame = opts.frames > 0 && frame >= opts.frames;

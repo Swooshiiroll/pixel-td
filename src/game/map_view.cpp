@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <utility>
+#include <vector>
 
 #include "core/los.hpp"
 
@@ -25,6 +27,8 @@ constexpr std::array<Rgbf, kMaterials> kMaterialColour = {{
 constexpr Rgbf kFormationColour{132.0f, 124.0f, 142.0f};
 constexpr Rgbf kNeutral{176.0f, 158.0f, 140.0f}; // materials are muted towards this
 constexpr Rgbf kHaze{58.0f, 62.0f, 80.0f};       // unexplored ground is pulled towards this
+constexpr float kHazeMix = 0.45f;                // ...this far
+constexpr Rgbf kMesaTint{230.0f, 140.0f, 60.0f}; // the mesa overlay tints terraced regions
 
 constexpr std::size_t cell_index(int x, int y) noexcept {
     return static_cast<std::size_t>(y) * static_cast<std::size_t>(kMapW) +
@@ -37,7 +41,7 @@ MapView::MapView(SDL_Renderer* renderer)
     : renderer_(renderer),
       pixels_(static_cast<std::size_t>(kMapPxW) * static_cast<std::size_t>(kMapPxH) * 4u, 0),
       cell_(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH)),
-      shown_(cell_.size()) {}
+      shown_(cell_.size()), haze_(cell_.size(), 0.0f) {}
 
 MapView::~MapView() {
     if (terrain_ != nullptr) {
@@ -45,7 +49,7 @@ MapView::~MapView() {
     }
 }
 
-bool MapView::set_map(const Map& map, const Fog& fog) {
+bool MapView::set_map(const Map& map, const GenLayers& layers, const Fog& fog) {
     const Uint64 start = SDL_GetTicksNS();
     if (terrain_ == nullptr) {
         terrain_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
@@ -56,10 +60,82 @@ bool MapView::set_map(const Map& map, const Fog& fog) {
         }
         SDL_SetTextureScaleMode(terrain_, SDL_SCALEMODE_NEAREST);
     }
+    core_ = map.core;
+    spawns_ = map.spawns;
+    fill_cells(map, layers);
+    const bool ok = render(map, fog, Rect{0, 0, kMapW, kMapH});
+    bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
+    return ok;
+}
 
-    // Each cell's colour: its material hue (softened over its neighbours and muted, so height
-    // reads first), times brightness from height, hill shading from the slope (lit from the
-    // north-west), and the shadow rock formations cast to the south-east.
+bool MapView::set_overlay(Overlay overlay, const Map& map, const GenLayers& layers,
+                          const Fog& fog) {
+    if (terrain_ == nullptr) {
+        overlay_ = overlay; // applied by the first set_map
+        return true;
+    }
+    const Uint64 start = SDL_GetTicksNS();
+    overlay_ = overlay;
+    fill_cells(map, layers);
+    const bool ok = render(map, fog, Rect{0, 0, kMapW, kMapH});
+    bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
+    return ok;
+}
+
+void MapView::fill_cells(const Map& map, const GenLayers& layers) {
+    if (overlay_ == Overlay::Elevation) {
+        return; // drawn per pixel from the heights (see render)
+    }
+    if (overlay_ != Overlay::Off) {
+        // A noise layer: greyscale, stretched over the layer's own lowest to highest value.
+        const Grid<int>* field = nullptr;
+        switch (overlay_) {
+        case Overlay::Octave1:
+            field = &layers.octave[0];
+            break;
+        case Overlay::Octave2:
+            field = &layers.octave[1];
+            break;
+        case Overlay::Octave3:
+            field = &layers.octave[2];
+            break;
+        case Overlay::Height:
+            field = &layers.height_sum;
+            break;
+        case Overlay::Mesa:
+            field = &layers.mesa_noise;
+            break;
+        case Overlay::Rough:
+            field = &layers.rough;
+            break;
+        default:
+            field = &layers.material;
+            break;
+        }
+        const auto [lo_it, hi_it] =
+            std::minmax_element(field->cells().begin(), field->cells().end());
+        const int lo = *lo_it;
+        const int span = std::max(1, *hi_it - lo);
+        for (int y = 0; y < kMapH; ++y) {
+            for (int x = 0; x < kMapW; ++x) {
+                const float g = layers.valid ? 30.0f + static_cast<float>(field->at(x, y) - lo) *
+                                                           205.0f / static_cast<float>(span)
+                                             : 128.0f; // the fallback map has no noise
+                Rgbf c{g, g, g};
+                if (overlay_ == Overlay::Mesa && layers.valid && layers.mesa.at(x, y) != 0) {
+                    for (std::size_t ch = 0; ch < 3; ++ch) {
+                        c[ch] = c[ch] * 0.55f + kMesaTint[ch] * 0.45f; // a terraced region
+                    }
+                }
+                cell_[cell_index(x, y)] = c;
+            }
+        }
+        return;
+    }
+
+    // The terrain. Each cell's colour: its material hue (softened over its neighbours and muted,
+    // so height reads first), times brightness from height, hill shading from the slope (lit from
+    // the north-west), and the shadow rock formations cast to the south-east.
     const auto h_at = [&](int x, int y) {
         return static_cast<float>(
             map.height.at(std::clamp(x, 0, kMapW - 1), std::clamp(y, 0, kMapH - 1)));
@@ -102,11 +178,6 @@ bool MapView::set_map(const Map& map, const Fog& fog) {
             cell_[cell_index(x, y)] = {base[0] * k, base[1] * k, base[2] * k};
         }
     }
-    core_ = map.core;
-    spawns_ = map.spawns;
-    const bool ok = render(map, fog, Rect{0, 0, kMapW, kMapH});
-    bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
-    return ok;
 }
 
 bool MapView::update(const Map& map, const Fog& fog, const Rect& cells) {
@@ -126,24 +197,64 @@ bool MapView::render(const Map& map, const Fog& fog, const Rect& cells) {
     for (int y = cells.y; y < cells.y + cells.h; ++y) {
         for (int x = cells.x; x < cells.x + cells.w; ++x) {
             const std::size_t i = cell_index(x, y);
-            shown_[i] = cell_[i];
-            if (map.core && !fog.explored({x, y})) {
-                for (std::size_t ch = 0; ch < 3; ++ch) {
-                    shown_[i][ch] = cell_[i][ch] * 0.55f + kHaze[ch] * 0.45f;
-                }
+            haze_[i] = map.core && !fog.explored({x, y}) ? 1.0f : 0.0f;
+            for (std::size_t ch = 0; ch < 3; ++ch) {
+                shown_[i][ch] =
+                    cell_[i][ch] * (1.0f - kHazeMix * haze_[i]) + kHaze[ch] * kHazeMix * haze_[i];
             }
         }
     }
-    // Each pixel blends the four nearest cell centres, so there are no visible tiles.
+
+    // Elevation: each pixel's height (in 1/16 units) blended between the four nearest cell
+    // centres, so the colour bands and contour lines are smooth curves rather than cell steps.
+    constexpr int kD = 2 * kCellPx; // a cell is kD sub-steps of half a pixel
+    const auto height16 = [&](int px, int py) {
+        const auto split = [](int p, int cells_n, int& c0, int& f) {
+            const int u = 2 * p + 1 - kCellPx;
+            c0 = u < 0 ? 0 : u / kD;
+            f = u < 0 ? 0 : u % kD;
+            if (c0 >= cells_n - 1) {
+                c0 = cells_n - 1;
+                f = 0;
+            }
+        };
+        int x0 = 0;
+        int fx = 0;
+        int y0 = 0;
+        int fy = 0;
+        split(std::clamp(px, 0, kMapPxW - 1), kMapW, x0, fx);
+        split(std::clamp(py, 0, kMapPxH - 1), kMapH, y0, fy);
+        const int x1 = std::min(x0 + 1, kMapW - 1);
+        const int y1 = std::min(y0 + 1, kMapH - 1);
+        const int top = map.height.at(x0, y0) * (kD - fx) + map.height.at(x1, y0) * fx;
+        const int bottom = map.height.at(x0, y1) * (kD - fx) + map.height.at(x1, y1) * fx;
+        return (top * (kD - fy) + bottom * fy) * 16 / (kD * kD);
+    };
+
     const int px0 = cells.x * kCellPx;
     const int py0 = cells.y * kCellPx;
     const int px1 = (cells.x + cells.w) * kCellPx;
     const int py1 = (cells.y + cells.h) * kCellPx;
+    const bool elevation = overlay_ == Overlay::Elevation;
+    std::vector<int> row;
+    std::vector<int> below;
+    if (elevation) {
+        row.resize(static_cast<std::size_t>(px1 - px0 + 1));
+        below.resize(row.size());
+        for (int px = px0; px <= px1; ++px) {
+            row[static_cast<std::size_t>(px - px0)] = height16(px, py0);
+        }
+    }
     for (int py = py0; py < py1; ++py) {
         const float v = (static_cast<float>(py) + 0.5f) / static_cast<float>(kCellPx) - 0.5f;
         const int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, kMapH - 1);
         const int y1 = std::min(y0 + 1, kMapH - 1);
         const float fy = std::clamp(v - static_cast<float>(y0), 0.0f, 1.0f);
+        if (elevation) {
+            for (int px = px0; px <= px1; ++px) {
+                below[static_cast<std::size_t>(px - px0)] = height16(px, py + 1);
+            }
+        }
         std::uint8_t* out =
             pixels_.data() +
             (static_cast<std::size_t>(py) * kMapPxW + static_cast<std::size_t>(px0)) * 4u;
@@ -152,19 +263,41 @@ bool MapView::render(const Map& map, const Fog& fog, const Rect& cells) {
             const int x0 = std::clamp(static_cast<int>(std::floor(u)), 0, kMapW - 1);
             const int x1 = std::min(x0 + 1, kMapW - 1);
             const float fx = std::clamp(u - static_cast<float>(x0), 0.0f, 1.0f);
-            const Rgbf& a = shown_[cell_index(x0, y0)];
-            const Rgbf& b = shown_[cell_index(x1, y0)];
-            const Rgbf& c = shown_[cell_index(x0, y1)];
-            const Rgbf& d = shown_[cell_index(x1, y1)];
             const float wa = (1.0f - fx) * (1.0f - fy);
             const float wb = fx * (1.0f - fy);
             const float wc = (1.0f - fx) * fy;
             const float wd = fx * fy;
+            Rgbf colour{0.0f, 0.0f, 0.0f};
+            if (elevation) {
+                const auto i = static_cast<std::size_t>(px - px0);
+                const int h = row[i];
+                const Rgb8 c = elevation_colour(h / 16);
+                const int level =
+                    std::max(contour_level(h, row[i + 1]), contour_level(h, below[i]));
+                const float k = level == 2 ? 0.40f : level == 1 ? 0.70f : 1.0f;
+                const float hz = haze_[cell_index(x0, y0)] * wa + haze_[cell_index(x1, y0)] * wb +
+                                 haze_[cell_index(x0, y1)] * wc + haze_[cell_index(x1, y1)] * wd;
+                const Rgbf rgb{static_cast<float>(c.r), static_cast<float>(c.g),
+                               static_cast<float>(c.b)};
+                for (std::size_t ch = 0; ch < 3; ++ch) {
+                    colour[ch] = rgb[ch] * k * (1.0f - kHazeMix * hz) + kHaze[ch] * kHazeMix * hz;
+                }
+            } else {
+                const Rgbf& a = shown_[cell_index(x0, y0)];
+                const Rgbf& b = shown_[cell_index(x1, y0)];
+                const Rgbf& c = shown_[cell_index(x0, y1)];
+                const Rgbf& d = shown_[cell_index(x1, y1)];
+                for (std::size_t ch = 0; ch < 3; ++ch) {
+                    colour[ch] = a[ch] * wa + b[ch] * wb + c[ch] * wc + d[ch] * wd;
+                }
+            }
             for (std::size_t ch = 0; ch < 3; ++ch) {
-                const float val = a[ch] * wa + b[ch] * wb + c[ch] * wc + d[ch] * wd;
-                out[ch] = static_cast<std::uint8_t>(std::clamp(val, 0.0f, 255.0f));
+                out[ch] = static_cast<std::uint8_t>(std::clamp(colour[ch], 0.0f, 255.0f));
             }
             out[3] = 255;
+        }
+        if (elevation) {
+            std::swap(row, below);
         }
     }
     const SDL_Rect area{px0, py0, px1 - px0, py1 - py0};
