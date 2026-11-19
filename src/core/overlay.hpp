@@ -42,10 +42,11 @@ struct Rgb8 {
     friend constexpr bool operator==(Rgb8, Rgb8) = default;
 };
 
-// Elevation colours (start values). Ground heights 0..200 run through the stops every 40 units:
-// deep blue, teal, green, yellow, orange, red-brown; heights above 200 (rock formations) are pale
-// grey-white, brighter the higher they stand.
-inline constexpr int kElevationStep = 40;
+// Elevation colours (start values). Ground heights 0..200 run through 11 stops, one every 20
+// units: deep blue, blue, teal, sea green, green, yellow-green, yellow, amber, orange, red-orange,
+// red-brown. Heights above 200 (rock formations) are pale grey-white, brighter the higher they
+// stand.
+inline constexpr int kElevationStep = 20;
 [[nodiscard]] Rgb8 elevation_colour(int height) noexcept;
 
 // Contour lines: a thin line every 10 height units, a strong one every 50.

@@ -106,11 +106,13 @@ TEST_CASE("the shooter's and the target's own cells never block") {
 }
 
 TEST_CASE("range grows with height above the target and shrinks uphill") {
-    const GenParams p; // +5% per 10 units, at most +50%, at worst -25%
+    const GenParams p; // +5% per 10 units, no cap downhill, at worst -25% uphill
     const int base = 72;
     CHECK(effective_range(base, 100, 100, p) == 72);
     CHECK(effective_range(base, 120, 100, p) == 72 * 110 / 100);
-    CHECK(effective_range(base, 200, 0, p) == 72 * 150 / 100);  // capped
+    CHECK(effective_range(base, 200, 100, p) == 72 * 150 / 100); // 100 above: +50%
+    CHECK(effective_range(base, 200, 0, p) == 72 * 200 / 100);   // 200 above: +100%, no cap
+    CHECK(max_reach(base, 150, p) == effective_range(base, 150, 0, p));
     CHECK(effective_range(base, 100, 120, p) == 72 * 90 / 100); // uphill
     CHECK(effective_range(base, 0, 200, p) == 72 * 75 / 100);   // floored
 }

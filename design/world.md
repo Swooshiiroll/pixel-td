@@ -53,7 +53,8 @@ Every cell has:
 
 - **Brightness shows height** (brighter is higher), and **hue shows the material**.
 - **Hills, valleys and mesas.** The generator layers smooth noise for rolling terrain and
-  terraces some regions into mesas with sheer sides.
+  terraces some regions into mesas: flat steps every **20 height units (start)**, each edge a
+  sheer side (a cliff, since 20 is over the cliff step).
 - **Cliff faces.** A step between neighbouring cells greater than **12 height units (start)** is a
   cliff.
   - Enemies can't cross a cliff, in either direction.
@@ -76,7 +77,8 @@ Every cell has:
 - **Sight is always direct**, even for lobbed weapons. A lobbed tower can hit what it can't see,
   but only once something else has explored it: artillery needs a spotter.
 - **Range grows with height above the target:**
-  - +5% per 10 height units the tower stands above the target, capped at **+50% (start)**;
+  - +5% per 10 height units the tower stands above the target **(start)**, with **no cap**: it keeps
+    growing with the drop (+20% at 40 units, +50% at 100, +100% at 200, the biggest drop possible);
   - shooting uphill shortens it the same way, down to **-25% (start)**.
   - So a tower's reach isn't a circle: it reaches further over low ground than up a hill.
 - Whether a weapon fires directly or is lobbed is a trait of the weapon part

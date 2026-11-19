@@ -138,13 +138,19 @@ TEST_CASE("overlay names round-trip, and unknown names are refused") {
 }
 
 TEST_CASE("the elevation ramp hits its stops and formations are pale") {
+    // One stop every 20 units.
     CHECK(elevation_colour(0) == Rgb8{24, 40, 110});    // deep blue
+    CHECK(elevation_colour(20) == Rgb8{28, 72, 150});   // blue
     CHECK(elevation_colour(40) == Rgb8{32, 128, 140});  // teal
+    CHECK(elevation_colour(60) == Rgb8{48, 150, 110});  // sea green
     CHECK(elevation_colour(80) == Rgb8{70, 160, 70});   // green
+    CHECK(elevation_colour(100) == Rgb8{150, 185, 70}); // yellow-green
     CHECK(elevation_colour(120) == Rgb8{220, 205, 80}); // yellow
+    CHECK(elevation_colour(140) == Rgb8{228, 175, 62}); // amber
     CHECK(elevation_colour(160) == Rgb8{225, 140, 50}); // orange
+    CHECK(elevation_colour(180) == Rgb8{195, 98, 44});  // red-orange
     CHECK(elevation_colour(200) == Rgb8{150, 60, 40});  // red-brown
-    CHECK(elevation_colour(20) == Rgb8{28, 84, 125});   // halfway, blue to teal
+    CHECK(elevation_colour(10) == Rgb8{26, 56, 130});   // halfway, deep blue to blue
     CHECK(elevation_colour(-5) == elevation_colour(0));
     for (int h : {210, 230, 255}) {
         const Rgb8 c = elevation_colour(h);
