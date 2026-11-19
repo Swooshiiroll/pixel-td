@@ -37,7 +37,8 @@ struct GenParams {
     // --- Materials (looks only): low-frequency noise picks one per cell.
     int material_noise_step = 64;
 
-    // --- The core: the seed picks a buildable 6x6 spot in the central third of the map.
+    // --- The core: the seed picks a buildable spot on the 8 px subgrid whose cells all lie in the
+    // central third of the map.
     Rect core_area{kMapW / 3, kMapH / 3, kMapW - 2 * (kMapW / 3), kMapH - 2 * (kMapH / 3)};
     int core_tries = 6; // core spots tried per terrain attempt before rejecting it
 
@@ -48,7 +49,7 @@ struct GenParams {
     int spawn_spacing = 60;                    // cells between spawns, at least
 
     // --- Towers (until towers have their own data), sight and range (design/world.md).
-    int light_range_cells = 6;
+    int light_range_px = 72;        // a light tower's base range (4.5 cells)
     int eye_height = 10;            // a tower sees and shoots from this far above its ground
     int target_height = 4;          // ...at a point this far above the target's ground
     int range_pct_per_10 = 5;       // range change per 10 height units above (or below) the target

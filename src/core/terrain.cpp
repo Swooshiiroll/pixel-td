@@ -34,15 +34,23 @@ bool is_cliff_cell(const Map& map, Cell c, const GenParams& p) noexcept {
     return false;
 }
 
-bool footprint_ok(const Map& map, Cell top_left, int size, const GenParams& p) noexcept {
-    if (!map.height.in_bounds(top_left) ||
-        !map.height.in_bounds(top_left.x + size - 1, top_left.y + size - 1)) {
+bool placement_ok(const Map& map, SubCell top_left, int size_sub, const GenParams& p) noexcept {
+    if (top_left.x < 0 || top_left.y < 0 || top_left.x + size_sub > kSubW ||
+        top_left.y + size_sub > kSubH) {
+        return false;
+    }
+    return footprint_ok(map, cells_under(top_left, size_sub), p);
+}
+
+bool footprint_ok(const Map& map, const Rect& cells, const GenParams& p) noexcept {
+    if (cells.w <= 0 || cells.h <= 0 || !map.height.in_bounds(cells.x, cells.y) ||
+        !map.height.in_bounds(cells.x + cells.w - 1, cells.y + cells.h - 1)) {
         return false;
     }
     int lo = 255;
     int hi = 0;
-    for (int y = top_left.y; y < top_left.y + size; ++y) {
-        for (int x = top_left.x; x < top_left.x + size; ++x) {
+    for (int y = cells.y; y < cells.y + cells.h; ++y) {
+        for (int x = cells.x; x < cells.x + cells.w; ++x) {
             const Cell c{x, y};
             if (is_formation(map, c) || is_cliff_cell(map, c, p)) {
                 return false;
