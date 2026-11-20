@@ -82,12 +82,16 @@ class MapView {
 
   private:
     bool create_textures();
+    bool create_tree_sprites();
+    void draw_trees(const DrawXf& xf, float sx, float sy, float sw, float sh) const;
     void fill_cells(const Map& map, const GenLayers& layers);
     bool upload_terrain();
 
     SDL_Renderer* renderer_;
-    SDL_Texture* terrain_ = nullptr; // one texel per cell
-    SDL_Texture* fog_ = nullptr;     // one texel per cell
+    SDL_Texture* terrain_ = nullptr;   // one texel per cell
+    SDL_Texture* fog_ = nullptr;       // one texel per cell
+    SDL_Texture* trees_tex_ = nullptr; // kTreeVariants canopies side by side, then their shadow
+    std::vector<std::uint8_t> trees_;  // 1 where a cell has a tree (for the sprites)
     Overlay overlay_ = Overlay::Off;
     bool fog_shown_ = true;
     std::vector<std::array<float, 3>> cell_; // each cell's colour (terrain or overlay)

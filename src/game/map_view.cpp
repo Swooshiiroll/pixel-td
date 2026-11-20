@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -37,6 +38,23 @@ constexpr std::uint8_t kHazeG = 62;
 constexpr std::uint8_t kHazeB = 80;
 constexpr std::uint8_t kHazeAlpha = 115; // 0.45 * 255
 
+// Tree sprites (#32, placeholders until the style board): each a small generated canopy with a
+// shadow, drawn over the terrain for the trees in view at 1/2 zoom and closer. Further out, the
+// cell tint alone shows the forests.
+constexpr int kTreePx = 16;        // sprite size in world pixels (one cell)
+constexpr int kTreeVariants = 3;   // canopy shapes, picked per cell by a hash
+constexpr float kTreesFrom = 0.5f; // the farthest zoom that draws them
+
+// A small integer hash of a cell, for the sprites' variant, size and jitter.
+constexpr std::uint32_t cell_hash(int x, int y) noexcept {
+    std::uint32_t h =
+        static_cast<std::uint32_t>(x) * 0x8da6b343u ^ static_cast<std::uint32_t>(y) * 0xd8163841u;
+    h ^= h >> 13u;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 15u;
+    return h;
+}
+
 constexpr std::size_t cell_index(int x, int y) noexcept {
     return static_cast<std::size_t>(y) * static_cast<std::size_t>(kMapW) +
            static_cast<std::size_t>(x);
@@ -59,6 +77,9 @@ MapView::~MapView() {
     if (fog_ != nullptr) {
         SDL_DestroyTexture(fog_);
     }
+    if (trees_tex_ != nullptr) {
+        SDL_DestroyTexture(trees_tex_);
+    }
 }
 
 bool MapView::create_textures() {
@@ -75,6 +96,61 @@ bool MapView::create_textures() {
     SDL_SetTextureScaleMode(terrain_, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureScaleMode(fog_, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureBlendMode(fog_, SDL_BLENDMODE_BLEND);
+    return create_tree_sprites();
+}
+
+bool MapView::create_tree_sprites() {
+    // One strip: kTreeVariants canopies, then one shadow, each kTreePx square. A canopy is a lumpy
+    // disc (its radius wobbles by angle) in greens, lit from the north-west, with a dark rim; the
+    // shadow is a soft dark disc.
+    constexpr int kW = kTreePx * (kTreeVariants + 1);
+    std::vector<std::uint8_t> px(static_cast<std::size_t>(kW) * kTreePx * 4, 0);
+    const auto put = [&](int x, int y, int r, int g, int b, int a) {
+        std::uint8_t* p =
+            px.data() + (static_cast<std::size_t>(y) * kW + static_cast<std::size_t>(x)) * 4u;
+        p[0] = static_cast<std::uint8_t>(r);
+        p[1] = static_cast<std::uint8_t>(g);
+        p[2] = static_cast<std::uint8_t>(b);
+        p[3] = static_cast<std::uint8_t>(a);
+    };
+    const float c = (kTreePx - 1) / 2.0f;
+    for (int v = 0; v <= kTreeVariants; ++v) {
+        for (int y = 0; y < kTreePx; ++y) {
+            for (int x = 0; x < kTreePx; ++x) {
+                const float dx = static_cast<float>(x) - c;
+                const float dy = static_cast<float>(y) - c;
+                const float d = std::sqrt(dx * dx + dy * dy);
+                if (v == kTreeVariants) { // the shadow
+                    if (d <= 6.5f) {
+                        put(kTreePx * v + x, y, 12, 18, 10, d <= 5.0f ? 110 : 60);
+                    }
+                    continue;
+                }
+                const float angle = std::atan2(dy, dx);
+                const float radius = 5.6f + 0.9f * std::sin(angle * static_cast<float>(3 + v) +
+                                                            static_cast<float>(v));
+                if (d > radius) {
+                    continue;
+                }
+                const std::uint32_t h = cell_hash(x + 31 * v, y);
+                const float lit = std::clamp(1.0f - (dx + dy) * 0.045f, 0.65f, 1.3f);
+                const float speck = 0.88f + static_cast<float>(h % 25u) / 100.0f;
+                const bool rim = d > radius - 1.0f;
+                const float k = (rim ? 0.6f : 1.0f) * lit * speck;
+                put(kTreePx * v + x, y, static_cast<int>(std::min(255.0f, 52.0f * k)),
+                    static_cast<int>(std::min(255.0f, (96.0f + 8.0f * static_cast<float>(v)) * k)),
+                    static_cast<int>(std::min(255.0f, 44.0f * k)), 255);
+            }
+        }
+    }
+    trees_tex_ =
+        SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kW, kTreePx);
+    if (trees_tex_ == nullptr || !SDL_UpdateTexture(trees_tex_, nullptr, px.data(), kW * 4)) {
+        SDL_Log("tree sprites failed: %s", SDL_GetError());
+        return false;
+    }
+    SDL_SetTextureBlendMode(trees_tex_, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(trees_tex_, SDL_SCALEMODE_NEAREST);
     return true;
 }
 
@@ -85,6 +161,12 @@ bool MapView::set_map(const Map& map, const GenLayers& layers, const Fog& fog) {
     }
     core_ = map.core;
     spawns_ = map.spawns;
+    trees_.assign(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH), 0);
+    for (int y = 0; y < kMapH; ++y) {
+        for (int x = 0; x < kMapW; ++x) {
+            trees_[cell_index(x, y)] = map.plant.at(x, y) == Plant::Tree ? 1 : 0;
+        }
+    }
     fill_cells(map, layers);
     const bool ok = upload_terrain() && update_fog(fog, Rect{0, 0, kMapW, kMapH});
     bake_ms_ = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
@@ -250,6 +332,9 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
     const auto c = static_cast<float>(kCellPx);
     const SDL_FRect src{sx / c, sy / c, sw / c, sh / c};
     SDL_RenderTexture(renderer_, terrain_, &src, &dst);
+    if (overlay_ == Overlay::Off && xf.k >= kTreesFrom) {
+        draw_trees(xf, sx, sy, sw, sh);
+    }
 
     // Fog: one texel per cell, stretched with linear filtering.
     if (fog_shown_ && core_) {
@@ -291,6 +376,40 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
         std::snprintf(label, sizeof label, "%d", s.opens_at_wave);
         SDL_SetRenderDrawColor(renderer_, 255, 240, 220, 255);
         SDL_RenderDebugText(renderer_, r.x + r.w + 2.0f, r.y + r.h / 2.0f - 4.0f, label);
+    }
+}
+
+void MapView::draw_trees(const DrawXf& xf, float sx, float sy, float sw, float sh) const {
+    if (trees_tex_ == nullptr || trees_.empty()) {
+        return;
+    }
+    const int x0 = std::max(0, static_cast<int>(sx) / kCellPx - 1);
+    const int y0 = std::max(0, static_cast<int>(sy) / kCellPx - 1);
+    const int x1 = std::min(kMapW - 1, static_cast<int>(sx + sw) / kCellPx + 1);
+    const int y1 = std::min(kMapH - 1, static_cast<int>(sy + sh) / kCellPx + 1);
+    // Each tree: its variant, a size of 13-17 px and a jitter of up to 3 px from the cell's hash,
+    // so they don't sit on a grid. All the shadows first, then the canopies on top.
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int y = y0; y <= y1; ++y) {
+            for (int x = x0; x <= x1; ++x) {
+                if (trees_[cell_index(x, y)] == 0) {
+                    continue;
+                }
+                const std::uint32_t h = cell_hash(x, y);
+                const int size = 13 + static_cast<int>(h % 5u);
+                const int jx = static_cast<int>((h >> 4u) % 7u) - 3;
+                const int jy = static_cast<int>((h >> 8u) % 7u) - 3;
+                const int shift = pass == 0 ? 3 : 0;
+                const RectPx r{x * kCellPx + (kCellPx - size) / 2 + jx + shift,
+                               y * kCellPx + (kCellPx - size) / 2 + jy + shift, size, size};
+                const int v =
+                    pass == 0 ? kTreeVariants : static_cast<int>((h >> 12u) % kTreeVariants);
+                const SDL_FRect srect{static_cast<float>(v * kTreePx), 0.0f,
+                                      static_cast<float>(kTreePx), static_cast<float>(kTreePx)};
+                const SDL_FRect d = xf.rect(r);
+                SDL_RenderTexture(renderer_, trees_tex_, &srect, &d);
+            }
+        }
     }
 }
 
