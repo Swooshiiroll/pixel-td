@@ -14,8 +14,9 @@ struct OverlayInfo {
 
 constexpr std::array<OverlayInfo, kOverlayCount> kInfo = {{
     {"off", "terrain"},
-    {"rough", "formation roughness"},
-    {"material", "material noise"},
+    {"mountain", "mountain noise"},
+    {"fertility", "fertility"},
+    {"moisture", "moisture"},
 }};
 
 } // namespace

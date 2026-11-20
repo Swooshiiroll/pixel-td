@@ -54,7 +54,7 @@ TEST_CASE("towers explore what they can see, within a circle") {
     }
     SUBCASE("a wall of rock blocks its sight") {
         for (int y = 0; y < kMapH; ++y) {
-            m.formation.at(15, y) = 120;
+            m.rock.at(15, y) = 120;
         }
         Fog fog;
         fog.explore_from(m, tower, range);
@@ -64,7 +64,7 @@ TEST_CASE("towers explore what they can see, within a circle") {
         CHECK(fog.explored({10, 3})); // its own side, other ways
     }
     SUBCASE("a single rock casts a sight shadow") {
-        m.formation.at(13, 10) = 1;
+        m.rock.at(13, 10) = 1;
         Fog fog;
         fog.explore_from(m, tower, range);
         CHECK_FALSE(fog.explored({16, 10})); // straight behind it
@@ -140,7 +140,8 @@ TEST_CASE("generation bench (manual)" * doctest::skip()) {
     MESSAGE("generate_map avg ", gen_total / kMaps, " ms, max ", gen_max, " ms");
     // The same with every layer domain-warped.
     GenParams heavy = p;
-    for (NoiseSpec* n : {&heavy.formation_rough, &heavy.material_noise}) {
+    for (NoiseSpec* n : {&heavy.fertility_noise, &heavy.moisture_noise, &heavy.mountain_noise,
+                         &heavy.forest_noise}) {
         n->warp_cells = 16;
     }
     double heavy_total = 0.0;

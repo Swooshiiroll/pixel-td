@@ -20,7 +20,9 @@ struct MapStats {
     bool fallback = false;
     double gen_ms = 0.0;
     double bake_ms = 0.0;
-    double formation_pct = 0.0;
+    double rock_pct = 0.0;
+    double water_pct = 0.0;
+    double tree_pct = 0.0;
     double buildable_pct = 0.0;                // light-tower spots, sampled every 2 cells
     std::array<int, 3> spawn_walk{-1, -1, -1}; // walking steps from each spawn to the core
 };
