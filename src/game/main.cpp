@@ -10,7 +10,8 @@
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
 //                       subgrid; repeatable)
-//     --overlay NAME    developer tool: start in an overlay: mountain, fertility or moisture (issue #13)
+//     --overlay NAME    developer tool: start in an overlay: mountain, fertility or moisture (issue
+//     #13)
 //     --zoom STEP       developer tool: start at `whole` (the whole map), `half`, or the
 //                       whole-number scale N
 //     --no-fog          developer tool: start with the fog hidden (F toggles it)
