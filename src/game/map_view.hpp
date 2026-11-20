@@ -34,12 +34,14 @@ struct DrawXf {
     }
 };
 
-// Draws a generated map (issue #25). The terrain is one texture with a texel per cell (960 x 540,
-// about 2 MB at any map size): each cell gets a colour (the flat ground's material hue, or a rock
-// formation shaded by its height, with its shadow), and the GPU stretches it with linear filtering,
-// so each pixel blends the four nearest cell centres: seamless, with nothing baked at full size.
-// The fog is a second cell texture. The core, spawns and probes are drawn over it each frame.
-// Colours are placeholders until the style board settles the art.
+// Draws a generated map (issue #25) in a 3/4 view (#35). The terrain is one texture with a texel
+// per cell (960 x 540, about 2 MB at any map size): each cell gets a colour (its ground, a
+// mountain's roof, or the cliff wall that covers the open cell south of rock), and the GPU
+// stretches it with linear filtering, so each pixel blends the four nearest cell centres: seamless,
+// with nothing baked at full size. Over it, at 1/2 zoom and closer, small generated sprites: the
+// cliff walls, standing trees and bank lips; the core and spawns stand as boxes at any zoom. The
+// fog is a second cell texture. Looks only: every rule stays on the flat ground grid. Colours are
+// placeholders until the style board settles the art.
 class MapView {
   public:
     explicit MapView(SDL_Renderer* renderer);
@@ -82,16 +84,23 @@ class MapView {
 
   private:
     bool create_textures();
-    bool create_tree_sprites();
-    void draw_trees(const DrawXf& xf, float sx, float sy, float sw, float sh) const;
+    bool create_sprites();
+    // The 3/4 view (#35): what lies flat on the ground (bank lips, tree shadows), then what stands
+    // (cliff walls, trees, the core, spawns) in rows from north to south, for the cells in `span`.
+    void draw_ground(const DrawXf& xf, const Rect& span) const;
+    void draw_standing(const DrawXf& xf, const Rect& span, bool sprites, const Fog& fog) const;
+    void draw_core(const DrawXf& xf) const;
+    void draw_spawn(const DrawXf& xf, const Spawn& s) const;
+    // A spawn's top face: its 2 x 2 cells, raised by its height.
+    [[nodiscard]] static RectPx spawn_top(const Spawn& s);
     void fill_cells(const Map& map, const GenLayers& layers);
     bool upload_terrain();
 
     SDL_Renderer* renderer_;
-    SDL_Texture* terrain_ = nullptr;   // one texel per cell
-    SDL_Texture* fog_ = nullptr;       // one texel per cell
-    SDL_Texture* trees_tex_ = nullptr; // kTreeVariants canopies side by side, then their shadow
-    std::vector<std::uint8_t> trees_;  // 1 where a cell has a tree (for the sprites)
+    SDL_Texture* terrain_ = nullptr;  // one texel per cell
+    SDL_Texture* fog_ = nullptr;      // one texel per cell
+    SDL_Texture* sprites_ = nullptr;  // the sprite atlas: trees, their shadow, walls, the bank lip
+    std::vector<std::uint8_t> marks_; // per cell: has a tree, a cliff wall, a bank lip
     Overlay overlay_ = Overlay::Off;
     bool fog_shown_ = true;
     std::vector<std::array<float, 3>> cell_; // each cell's colour (terrain or overlay)

@@ -50,7 +50,17 @@ can walk (fords are the river crossings), and your towers shape the rest of thei
   footprint covers parts of several cells: a light tower always 2 x 2 cells, a heavy one 3 x 3 or
   4 x 4 depending on where it sits, and the core 5 x 5.
 - There's one map per run, and it's fixed for the whole run.
-- The view is flat top-down, and the setting is a planet-surface outpost.
+- The view is an **oblique 3/4 view** (#35), and the setting is a planet-surface outpost. The ground
+  grid stays square and axis-aligned; things stand up and show their south face, covering what's
+  behind them. It's **looks only**: walking, building, sight, range, the cursor and the HUD all
+  stay on the flat ground grid.
+  - **Mountains:** rock cells are the roof. Where rock has open ground directly south, a cliff wall
+    1 cell tall is drawn over that ground cell, which keeps its own rules. So a 2-cell east-west
+    tunnel looks 1 cell wide (the owner's choice: roof plus south wall).
+  - **Objects** (trees, the core, spawns, later towers) stand on their footprint: the foot on the
+    ground cells, the body rising north over the cells behind, so the cursor and placement match
+    the footprint.
+  - **Water** sits below the ground: a bank lip on the north edge of rivers and lakes.
 
 ### Terrain
 
@@ -210,11 +220,17 @@ Fog works as **explored ground**:
 | 3840x2160 | 7x, **6x**, …, 1x, 1/2, whole map (1/4) |
 | 1280x720 | 3x, **2x**, 1x, 1/2, 1/4, 1/8, whole map (1/12) |
 
-**How the terrain is drawn.** Every cell gets one colour (the ground's colour, darker under trees, or rock
-shaded by its looks value, plus the shadows the rock casts), stored in a 960 x 540 texture of about 2 MB. The GPU
-stretches it with linear filtering, so each pixel blends the four nearest cell centres: the terrain
-is seamless, and the whole map costs that one small texture at any size, with nothing to bake. At
-whole-number steps it's drawn 1:1 in world pixels and then scaled up crisp, as before.
+**How the terrain is drawn.** Every cell gets one colour (the ground's colour, darker under trees; a
+mountain's roof, shaded by its looks value and lit along its south edge; or the cliff wall that
+covers the open cell south of rock, with its shadow on the cell below), stored in a 960 x 540
+texture of about 2 MB. The GPU stretches it with linear filtering, so each pixel blends the four
+nearest cell centres: the terrain is seamless, and the whole map costs that one small texture at
+any size, with nothing to bake. At whole-number steps it's drawn 1:1 in world pixels and then
+scaled up crisp, as before.
+- **The 3/4 view (#35):** at 1/2 zoom and closer, small generated sprites go over it for the cells
+  in view: bank lips and tree shadows on the ground, then, row by row from north to south (so
+  nearer things cover farther ones), the cliff walls, the standing trees, the core and the spawns.
+  Further out, the cell colours carry the walls and forests; the core and spawns stand at any zoom.
 - The camera starts centred on the core.
 
 ### Developer tools

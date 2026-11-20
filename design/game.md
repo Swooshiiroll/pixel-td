@@ -31,7 +31,9 @@ beacon) near the centre of the map holds against enemies coming from seeded spaw
 edges or inside it.
 
 **View**
-- Flat top-down, looking straight down.
+- Oblique 3/4 (#35): the ground grid stays square; mountains show cliff walls on their south faces,
+  and trees, the core and spawns stand up over the cells behind them. Looks only: every rule stays
+  on the flat ground grid ([world.md](world.md)).
 - Pixel-perfect: the world is drawn 1:1 and shown at a whole-number scale. The view fills the
   window, and the default zoom shows about 640x360 world pixels. Zooming out past 1x, through halving
   steps to the whole map, is the one exception: those steps are drawn shrunk and smooth.

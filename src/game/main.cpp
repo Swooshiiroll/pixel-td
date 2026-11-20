@@ -4,9 +4,9 @@
 // window-sized texture, shrunk and smooth: the one exception to pixel-perfect (design/world.md,
 // Camera).
 //
-//   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--zoom STEP] [--no-fog] [--window WxH]
-//           [--preset FILE] [--panel] [--map-shot file.bmp] [--map-scale N] [--frames N]
-//           [--screenshot file.bmp]
+//   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--zoom STEP] [--look X,Y] [--no-fog]
+//           [--window WxH] [--preset FILE] [--panel] [--map-shot file.bmp] [--map-scale N]
+//           [--frames N] [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
 //                       subgrid; repeatable)
@@ -14,6 +14,7 @@
 //     #13)
 //     --zoom STEP       developer tool: start at `whole` (the whole map), `half`, or the
 //                       whole-number scale N
+//     --look X,Y        developer tool: start with the camera centred on cell X,Y (#35)
 //     --no-fog          developer tool: start with the fog hidden (F toggles it)
 //     --window WxH      developer tool: open the window at W x H (screenshots)
 //     --preset FILE     developer tool: generate with the settings in a preset file (#21)
@@ -86,6 +87,8 @@ struct Options {
     Overlay overlay = Overlay::Off;
     StartZoom zoom = StartZoom::Standard;
     int zoom_scale = 0;
+    bool has_look = false;
+    Cell look{};
     bool no_fog = false;
     const char* preset = nullptr;
     bool panel = false;
@@ -154,6 +157,13 @@ bool parse_options(int argc, char** argv, Options& out) {
                 std::fprintf(stderr, "--zoom takes whole, half or a whole-number scale\n");
                 return false;
             }
+        } else if (std::strcmp(argv[i], "--look") == 0 && has_value) {
+            if (!parse_pair(argv[++i], ',', out.look.x, out.look.y) || out.look.x < 0 ||
+                out.look.y < 0 || out.look.x >= kMapW || out.look.y >= kMapH) {
+                std::fprintf(stderr, "--look takes a cell on the map as X,Y\n");
+                return false;
+            }
+            out.has_look = true;
         } else if (std::strcmp(argv[i], "--no-fog") == 0) {
             out.no_fog = true;
         } else if (std::strcmp(argv[i], "--preset") == 0 && has_value) {
@@ -173,10 +183,12 @@ bool parse_options(int argc, char** argv, Options& out) {
                 return false;
             }
         } else {
-            std::fprintf(stderr, "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
-                                 "[--zoom whole|half|N] [--no-fog] [--window WxH] [--preset FILE] "
-                                 "[--panel] [--map-shot file.bmp] [--map-scale 2|4|8] [--frames N] "
-                                 "[--screenshot file.bmp]\n");
+            std::fprintf(
+                stderr,
+                "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
+                "[--zoom whole|half|N] [--look X,Y] [--no-fog] [--window WxH] [--preset FILE] "
+                "[--panel] [--map-shot file.bmp] [--map-scale 2|4|8] [--frames N] "
+                "[--screenshot file.bmp]\n");
             return false;
         }
     }
@@ -557,7 +569,10 @@ int main(int argc, char** argv) {
                         c.x, c.y);
             }
         }
-        CameraPos cam = centred_on(core_rect(world.map), screen.view);
+        CameraPos cam = centred_on(
+            opts.has_look ? RectPx{opts.look.x * kCellPx, opts.look.y * kCellPx, kCellPx, kCellPx}
+                          : core_rect(world.map),
+            screen.view);
         bool probe_mode = false;
         bool regen_pending = false; // the tuning panel changed something while dragging
         Uint64 last_regen = 0;

@@ -16,8 +16,9 @@ namespace {
 using Rgbf = std::array<float, 3>;
 
 // Placeholder palette (temperate, #32) until the style board picks the art direction. Each ground
-// type has a colour; trees darken their cell (so forests read zoomed out), rock is shaded by how
-// tall it stands and casts a shadow to the south-east.
+// type has a colour; trees darken their cell (so forests read zoomed out). Rock is the mountains'
+// roof, shaded by its looks value; in the 3/4 view (#35) an open cell with rock directly north is
+// covered by the mountain's cliff wall, and the cell south of that lies in the wall's shadow.
 constexpr std::array<Rgbf, kGrounds> kGroundColour = {{
     {118.0f, 128.0f, 70.0f},  // soil (grassy)
     {92.0f, 118.0f, 58.0f},   // rich soil
@@ -31,6 +32,9 @@ constexpr std::array<Rgbf, kGrounds> kGroundColour = {{
 constexpr Rgbf kRockColour{128.0f, 124.0f, 120.0f};
 constexpr Rgbf kTreeColour{46.0f, 82.0f, 40.0f};
 constexpr Rgbf kBareSoil{132.0f, 112.0f, 82.0f}; // soil without grass
+constexpr Rgbf kWallColour{92.0f, 88.0f, 84.0f}; // a cell under a cliff wall, zoomed out
+constexpr float kRoofLip = 1.15f;                // the roof's south edge, lit
+constexpr float kWallShadow = 0.7f;              // the ground just south of a wall
 
 // The fog layer: unexplored cells are pulled this far towards this colour.
 constexpr std::uint8_t kHazeR = 58;
@@ -38,12 +42,30 @@ constexpr std::uint8_t kHazeG = 62;
 constexpr std::uint8_t kHazeB = 80;
 constexpr std::uint8_t kHazeAlpha = 115; // 0.45 * 255
 
-// Tree sprites (#32, placeholders until the style board): each a small generated canopy with a
-// shadow, drawn over the terrain for the trees in view at 1/2 zoom and closer. Further out, the
-// cell tint alone shows the forests.
-constexpr int kTreePx = 16;        // sprite size in world pixels (one cell)
-constexpr int kTreeVariants = 3;   // canopy shapes, picked per cell by a hash
-constexpr float kTreesFrom = 0.5f; // the farthest zoom that draws them
+// Sprites for the 3/4 view (#35, placeholders until the style board): one generated atlas of 16 px
+// columns, drawn with nearest filtering for what's in view at 1/2 zoom and closer. Further out,
+// the cell colours carry them. Trees stand on their cell (the foot at the bottom, the canopy
+// rising over the cells behind); a cliff wall covers the open cell south of rock; a bank lip sits
+// on the top edge of water below dry land, so the water lies lower than the ground.
+constexpr int kCol = 16;             // an atlas column: one cell wide
+constexpr int kAtlasH = 32;          // the tallest sprite (a tree)
+constexpr int kTreeVariants = 3;     // columns 0-2: trees, 16 x 32
+constexpr int kTreeShadowCol = 3;    // column 3: a tree's shadow, a soft ellipse 16 x 8
+constexpr int kWallCol = 4;          // columns 4-7: cliff walls, 16 x 16
+constexpr int kWallVariants = 4;     //
+constexpr int kBankCol = 8;          // column 8: the bank lip, 16 x kBankPx
+constexpr int kBankPx = 5;           //
+constexpr int kAtlasCols = 9;        //
+constexpr float kSpritesFrom = 0.5f; // the farthest zoom that draws them
+constexpr int kWallEndPx = 2;        // the darker edge where a wall run ends
+constexpr int kCoreHeightPx = 24;    // how tall the core stands
+constexpr int kSpawnHeightPx = 16;   // how tall a spawn stands
+constexpr int kBoxShadowPx = 6;      // the core's and spawns' shadow, to the south-east
+
+// What a cell carries for the sprites.
+constexpr std::uint8_t kMarkTree = 1;
+constexpr std::uint8_t kMarkWall = 2;
+constexpr std::uint8_t kMarkBank = 4;
 
 // A small integer hash of a cell, for the sprites' variant, size and jitter.
 constexpr std::uint32_t cell_hash(int x, int y) noexcept {
@@ -64,6 +86,26 @@ constexpr std::size_t cell_bytes() noexcept {
     return static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH) * 4u;
 }
 
+// Where a cell's tree stands: its foot (world pixels), its width (13-17 px; it's twice as tall)
+// and its variant, from the cell's hash, so trees don't sit on a grid. The foot stays in the cell.
+struct TreeAt {
+    int foot_x = 0;
+    int foot_y = 0;
+    int size = 0;
+    int variant = 0;
+};
+
+constexpr TreeAt tree_at(int x, int y) noexcept {
+    const std::uint32_t h = cell_hash(x, y);
+    return {x * kCellPx + kCellPx / 2 + static_cast<int>((h >> 4u) % 7u) - 3,
+            (y + 1) * kCellPx - 1 - static_cast<int>((h >> 8u) % 3u), 13 + static_cast<int>(h % 5u),
+            static_cast<int>((h >> 12u) % kTreeVariants)};
+}
+
+constexpr SDL_FRect atlas(int col, int w, int h) noexcept {
+    return {static_cast<float>(col * kCol), 0.0f, static_cast<float>(w), static_cast<float>(h)};
+}
+
 } // namespace
 
 MapView::MapView(SDL_Renderer* renderer)
@@ -77,8 +119,8 @@ MapView::~MapView() {
     if (fog_ != nullptr) {
         SDL_DestroyTexture(fog_);
     }
-    if (trees_tex_ != nullptr) {
-        SDL_DestroyTexture(trees_tex_);
+    if (sprites_ != nullptr) {
+        SDL_DestroyTexture(sprites_);
     }
 }
 
@@ -96,61 +138,124 @@ bool MapView::create_textures() {
     SDL_SetTextureScaleMode(terrain_, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureScaleMode(fog_, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureBlendMode(fog_, SDL_BLENDMODE_BLEND);
-    return create_tree_sprites();
+    return create_sprites();
 }
 
-bool MapView::create_tree_sprites() {
-    // One strip: kTreeVariants canopies, then one shadow, each kTreePx square. A canopy is a lumpy
-    // disc (its radius wobbles by angle) in greens, lit from the north-west, with a dark rim; the
-    // shadow is a soft dark disc.
-    constexpr int kW = kTreePx * (kTreeVariants + 1);
-    std::vector<std::uint8_t> px(static_cast<std::size_t>(kW) * kTreePx * 4, 0);
-    const auto put = [&](int x, int y, int r, int g, int b, int a) {
+bool MapView::create_sprites() {
+    constexpr int kW = kCol * kAtlasCols;
+    std::vector<std::uint8_t> px(static_cast<std::size_t>(kW) * kAtlasH * 4, 0);
+    const auto put = [&](int x, int y, float r, float g, float b, int a) {
         std::uint8_t* p =
             px.data() + (static_cast<std::size_t>(y) * kW + static_cast<std::size_t>(x)) * 4u;
-        p[0] = static_cast<std::uint8_t>(r);
-        p[1] = static_cast<std::uint8_t>(g);
-        p[2] = static_cast<std::uint8_t>(b);
+        p[0] = static_cast<std::uint8_t>(std::clamp(r, 0.0f, 255.0f));
+        p[1] = static_cast<std::uint8_t>(std::clamp(g, 0.0f, 255.0f));
+        p[2] = static_cast<std::uint8_t>(std::clamp(b, 0.0f, 255.0f));
         p[3] = static_cast<std::uint8_t>(a);
     };
-    const float c = (kTreePx - 1) / 2.0f;
-    for (int v = 0; v <= kTreeVariants; ++v) {
-        for (int y = 0; y < kTreePx; ++y) {
-            for (int x = 0; x < kTreePx; ++x) {
-                const float dx = static_cast<float>(x) - c;
-                const float dy = static_cast<float>(y) - c;
+
+    // Trees: a trunk 3 px wide at the foot, under a lumpy canopy (its radius wobbles by angle; a
+    // little taller than wide) in greens, lit from the north-west, with a dark rim.
+    for (int v = 0; v < kTreeVariants; ++v) {
+        const int ox = kCol * v;
+        for (int y = 20; y < kAtlasH; ++y) {
+            for (int x = 6; x <= 8; ++x) {
+                const float k = (x == 6   ? 1.2f
+                                 : x == 8 ? 0.75f
+                                          : 1.0f) *
+                                (y == kAtlasH - 1 ? 0.7f : 1.0f);
+                put(ox + x, y, 92.0f * k, 64.0f * k, 42.0f * k, 255);
+            }
+        }
+        const float cx = 7.5f;
+        const float cy = 15.0f;
+        for (int y = 0; y < kAtlasH; ++y) {
+            for (int x = 0; x < kCol; ++x) {
+                const float dx = static_cast<float>(x) - cx;
+                const float dy = (static_cast<float>(y) - cy) / 1.25f;
                 const float d = std::sqrt(dx * dx + dy * dy);
-                if (v == kTreeVariants) { // the shadow
-                    if (d <= 6.5f) {
-                        put(kTreePx * v + x, y, 12, 18, 10, d <= 5.0f ? 110 : 60);
-                    }
-                    continue;
-                }
                 const float angle = std::atan2(dy, dx);
-                const float radius = 5.6f + 0.9f * std::sin(angle * static_cast<float>(3 + v) +
+                const float radius = 6.8f + 0.9f * std::sin(angle * static_cast<float>(3 + v) +
                                                             static_cast<float>(v));
                 if (d > radius) {
                     continue;
                 }
                 const std::uint32_t h = cell_hash(x + 31 * v, y);
-                const float lit = std::clamp(1.0f - (dx + dy) * 0.045f, 0.65f, 1.3f);
+                const float lit = std::clamp(1.0f - (dx + dy) * 0.05f, 0.65f, 1.3f);
                 const float speck = 0.88f + static_cast<float>(h % 25u) / 100.0f;
                 const bool rim = d > radius - 1.0f;
                 const float k = (rim ? 0.6f : 1.0f) * lit * speck;
-                put(kTreePx * v + x, y, static_cast<int>(std::min(255.0f, 52.0f * k)),
-                    static_cast<int>(std::min(255.0f, (96.0f + 8.0f * static_cast<float>(v)) * k)),
-                    static_cast<int>(std::min(255.0f, 44.0f * k)), 255);
+                put(ox + x, y, 52.0f * k, (96.0f + 8.0f * static_cast<float>(v)) * k, 44.0f * k,
+                    255);
             }
         }
     }
-    trees_tex_ =
-        SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kW, kTreePx);
-    if (trees_tex_ == nullptr || !SDL_UpdateTexture(trees_tex_, nullptr, px.data(), kW * 4)) {
-        SDL_Log("tree sprites failed: %s", SDL_GetError());
+
+    // A tree's shadow: a soft dark ellipse, laid on the ground to the south-east of its foot.
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < kCol; ++x) {
+            const float dx = (static_cast<float>(x) - 7.5f) / 7.5f;
+            const float dy = (static_cast<float>(y) - 3.5f) / 3.5f;
+            const float n = dx * dx + dy * dy;
+            if (n <= 1.0f) {
+                put(kCol * kTreeShadowCol + x, y, 12.0f, 18.0f, 10.0f, n <= 0.5f ? 110 : 60);
+            }
+        }
+    }
+
+    // Cliff walls: rock strata in bands, with a dark seam between them, lit at the top edge (the
+    // roof's lip) and darker towards the foot, flecked, with a crack picked by the variant.
+    for (int v = 0; v < kWallVariants; ++v) {
+        const int ox = kCol * (kWallCol + v);
+        for (int y = 0; y < kCol; ++y) {
+            for (int x = 0; x < kCol; ++x) {
+                const std::uint32_t h = cell_hash(x + 17 * v, y + 40);
+                float k = (1.08f - 0.4f * static_cast<float>(y) / 15.0f) *
+                          (((y + v) / 4) % 2 == 0 ? 1.0f : 0.9f) *
+                          (0.92f + static_cast<float>(h % 17u) / 100.0f);
+                if ((y + v) % 4 == 0 && y > 1) {
+                    k *= 0.82f; // the seam between strata
+                }
+                if (y == 0) {
+                    k *= 1.3f;
+                } else if (y >= kCol - 2) {
+                    k *= 0.75f;
+                }
+                put(ox + x, y, 104.0f * k, 98.0f * k, 92.0f * k, 255);
+            }
+        }
+        const int crack_x = 3 + static_cast<int>(cell_hash(v, 99) % 10u);
+        for (int y = 3; y < 9 + v % 3; ++y) {
+            const int x = std::clamp(crack_x + static_cast<int>((cell_hash(v, y) >> 3u) % 3u) - 1,
+                                     0, kCol - 1);
+            put(ox + x, y, 44.0f, 42.0f, 40.0f, 255);
+        }
+    }
+
+    // The bank lip: earth, light at the top and dark at the drop, then a shadow on the water.
+    constexpr std::array<std::array<int, 4>, kBankPx> kBank = {{
+        {150, 128, 92, 255},
+        {126, 104, 74, 255},
+        {104, 84, 60, 255},
+        {70, 56, 42, 230},
+        {20, 30, 40, 110},
+    }};
+    for (int y = 0; y < kBankPx; ++y) {
+        for (int x = 0; x < kCol; ++x) {
+            const float k = 0.92f + static_cast<float>(cell_hash(x, y + 70) % 17u) / 100.0f;
+            const auto& c = kBank[static_cast<std::size_t>(y)];
+            put(kCol * kBankCol + x, y, static_cast<float>(c[0]) * k, static_cast<float>(c[1]) * k,
+                static_cast<float>(c[2]) * k, c[3]);
+        }
+    }
+
+    sprites_ =
+        SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kW, kAtlasH);
+    if (sprites_ == nullptr || !SDL_UpdateTexture(sprites_, nullptr, px.data(), kW * 4)) {
+        SDL_Log("sprites failed: %s", SDL_GetError());
         return false;
     }
-    SDL_SetTextureBlendMode(trees_tex_, SDL_BLENDMODE_BLEND);
-    SDL_SetTextureScaleMode(trees_tex_, SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureBlendMode(sprites_, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(sprites_, SDL_SCALEMODE_NEAREST);
     return true;
 }
 
@@ -161,10 +266,23 @@ bool MapView::set_map(const Map& map, const GenLayers& layers, const Fog& fog) {
     }
     core_ = map.core;
     spawns_ = map.spawns;
-    trees_.assign(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH), 0);
+    marks_.assign(static_cast<std::size_t>(kMapW) * static_cast<std::size_t>(kMapH), 0);
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
-            trees_[cell_index(x, y)] = map.plant.at(x, y) == Plant::Tree ? 1 : 0;
+            std::uint8_t m = 0;
+            const bool open = map.rock.at(x, y) == 0;
+            const bool rock_north = y > 0 && map.rock.at(x, y - 1) != 0;
+            if (map.plant.at(x, y) == Plant::Tree) {
+                m |= kMarkTree;
+            }
+            if (open && rock_north) {
+                m |= kMarkWall;
+            }
+            if (open && y > 0 && !rock_north && is_water(map.ground.at(x, y)) &&
+                !is_water(map.ground.at(x, y - 1))) {
+                m |= kMarkBank;
+            }
+            marks_[cell_index(x, y)] = m;
         }
     }
     fill_cells(map, layers);
@@ -224,12 +342,16 @@ void MapView::fill_cells(const Map& map, const GenLayers& layers) {
     }
 
     // The terrain. The ground's colour (soil shows bare where nothing grows), softened over its
-    // neighbours, darkened under trees. Rock is shaded by how tall it stands (its 1..255 value),
-    // lit from the north-west, and casts a shadow to the south-east.
+    // neighbours, darkened under trees. Rock is the roof, gently shaded by its 1..255 looks value
+    // and lit along its south edge; the open cell below it is covered by the cliff wall, and the
+    // one below that is in the wall's shadow (3/4 view, #35).
     const auto rock = [&](int x, int y) {
         return map.rock.in_bounds(x, y) ? static_cast<float>(map.rock.at(x, y)) : 0.0f;
     };
     const auto rock_at = [&](int x, int y) { return rock(x, y) > 0.0f; };
+    const auto wall_at = [&](int x, int y) {
+        return map.rock.in_bounds(x, y) && !rock_at(x, y) && rock_at(x, y - 1);
+    };
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
             Rgbf base{0.0f, 0.0f, 0.0f};
@@ -238,8 +360,14 @@ void MapView::fill_cells(const Map& map, const GenLayers& layers) {
                 base = kRockColour;
                 const float gx = rock(x + 1, y) - rock(x - 1, y);
                 const float gy = rock(x, y + 1) - rock(x, y - 1);
-                k = (1.0f + 0.4f * rock(x, y) / 255.0f) *
-                    std::clamp(1.0f - (gx + gy) * 0.004f, 0.55f, 1.4f);
+                k = (1.0f + 0.25f * rock(x, y) / 255.0f) *
+                    std::clamp(1.0f - (gx + gy) * 0.0025f, 0.75f, 1.25f);
+                if (y + 1 < kMapH && !rock_at(x, y + 1)) {
+                    k *= kRoofLip;
+                }
+            } else if (wall_at(x, y)) {
+                base = kWallColour;
+                k = 1.0f;
             } else {
                 // A light blend with the 4 neighbours softens the edges between ground types.
                 const auto colour_at = [&](int cx, int cy) -> Rgbf {
@@ -268,13 +396,8 @@ void MapView::fill_cells(const Map& map, const GenLayers& layers) {
                     }
                 }
             }
-            if (!rock_at(x, y)) {
-                for (int d = 1; d <= 4; ++d) {
-                    if (rock_at(x - d, y - d)) {
-                        k *= 0.62f; // in the shadow of rock
-                        break;
-                    }
-                }
+            if (wall_at(x, y - 1)) {
+                k *= kWallShadow;
             }
             cell_[cell_index(x, y)] = {base[0] * k, base[1] * k, base[2] * k};
         }
@@ -332,46 +455,33 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
     const auto c = static_cast<float>(kCellPx);
     const SDL_FRect src{sx / c, sy / c, sw / c, sh / c};
     SDL_RenderTexture(renderer_, terrain_, &src, &dst);
-    if (overlay_ == Overlay::Off && xf.k >= kTreesFrom) {
-        draw_trees(xf, sx, sy, sw, sh);
+
+    // The cells in view, with a margin: a column each side (trees are jittered) and two rows below
+    // (trees and the core rise over the cells behind them).
+    const int x0 = std::max(0, static_cast<int>(sx) / kCellPx - 1);
+    const int y0 = std::max(0, static_cast<int>(sy) / kCellPx - 1);
+    const int x1 = std::min(kMapW - 1, static_cast<int>(sx + sw) / kCellPx + 1);
+    const int y1 = std::min(kMapH - 1, static_cast<int>(sy + sh) / kCellPx + 2);
+    const Rect span{x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+    const bool sprites =
+        overlay_ == Overlay::Off && xf.k >= kSpritesFrom && sprites_ != nullptr && !marks_.empty();
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    if (sprites) {
+        draw_ground(xf, span);
     }
+    draw_standing(xf, span, sprites, fog);
 
     // Fog: one texel per cell, stretched with linear filtering.
     if (fog_shown_ && core_) {
         SDL_RenderTexture(renderer_, fog_, &src, &dst);
     }
 
-    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-    if (core_) {
-        // The core: a placeholder reactor (frame, body, glowing heart).
-        const SDL_FRect frame = xf.rect(rect_of(*core_, kCoreSub));
-        SDL_SetRenderDrawColor(renderer_, 28, 34, 52, 255);
-        SDL_RenderFillRect(renderer_, &frame);
-        const float b = 4.0f * xf.k;
-        const SDL_FRect body{frame.x + b, frame.y + b, frame.w - 2.0f * b, frame.h - 2.0f * b};
-        SDL_SetRenderDrawColor(renderer_, 70, 96, 128, 255);
-        SDL_RenderFillRect(renderer_, &body);
-        const float hrt = 24.0f * xf.k;
-        const SDL_FRect heart{frame.x + hrt, frame.y + hrt, frame.w - 2.0f * hrt,
-                              frame.h - 2.0f * hrt};
-        SDL_SetRenderDrawColor(renderer_, 110, 230, 255, 255);
-        SDL_RenderFillRect(renderer_, &heart);
-        SDL_SetRenderDrawColor(renderer_, 140, 200, 230, 255);
-        SDL_RenderRect(renderer_, &frame);
-    }
-
-    // Spawns: red markers labelled with the wave they open at, once explored (or with the fog
-    // hidden).
+    // The spawns' labels: the wave each opens at, over the fog.
     for (const Spawn& s : spawns_) {
         if (fog_shown_ && !fog.spawn_found(s)) {
             continue;
         }
-        const SDL_FRect r =
-            xf.rect(RectPx{s.cell.x * kCellPx, s.cell.y * kCellPx, 2 * kCellPx, 2 * kCellPx});
-        SDL_SetRenderDrawColor(renderer_, 220, 64, 52, 255);
-        SDL_RenderFillRect(renderer_, &r);
-        SDL_SetRenderDrawColor(renderer_, 255, 190, 120, 255);
-        SDL_RenderRect(renderer_, &r);
+        const SDL_FRect r = xf.rect(spawn_top(s));
         char label[8];
         std::snprintf(label, sizeof label, "%d", s.opens_at_wave);
         SDL_SetRenderDrawColor(renderer_, 255, 240, 220, 255);
@@ -379,38 +489,143 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
     }
 }
 
-void MapView::draw_trees(const DrawXf& xf, float sx, float sy, float sw, float sh) const {
-    if (trees_tex_ == nullptr || trees_.empty()) {
-        return;
-    }
-    const int x0 = std::max(0, static_cast<int>(sx) / kCellPx - 1);
-    const int y0 = std::max(0, static_cast<int>(sy) / kCellPx - 1);
-    const int x1 = std::min(kMapW - 1, static_cast<int>(sx + sw) / kCellPx + 1);
-    const int y1 = std::min(kMapH - 1, static_cast<int>(sy + sh) / kCellPx + 1);
-    // Each tree: its variant, a size of 13-17 px and a jitter of up to 3 px from the cell's hash,
-    // so they don't sit on a grid. All the shadows first, then the canopies on top.
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int y = y0; y <= y1; ++y) {
-            for (int x = x0; x <= x1; ++x) {
-                if (trees_[cell_index(x, y)] == 0) {
-                    continue;
-                }
-                const std::uint32_t h = cell_hash(x, y);
-                const int size = 13 + static_cast<int>(h % 5u);
-                const int jx = static_cast<int>((h >> 4u) % 7u) - 3;
-                const int jy = static_cast<int>((h >> 8u) % 7u) - 3;
-                const int shift = pass == 0 ? 3 : 0;
-                const RectPx r{x * kCellPx + (kCellPx - size) / 2 + jx + shift,
-                               y * kCellPx + (kCellPx - size) / 2 + jy + shift, size, size};
-                const int v =
-                    pass == 0 ? kTreeVariants : static_cast<int>((h >> 12u) % kTreeVariants);
-                const SDL_FRect srect{static_cast<float>(v * kTreePx), 0.0f,
-                                      static_cast<float>(kTreePx), static_cast<float>(kTreePx)};
-                const SDL_FRect d = xf.rect(r);
-                SDL_RenderTexture(renderer_, trees_tex_, &srect, &d);
+RectPx MapView::spawn_top(const Spawn& s) {
+    return {s.cell.x * kCellPx, s.cell.y * kCellPx - kSpawnHeightPx, 2 * kCellPx, 2 * kCellPx};
+}
+
+void MapView::draw_ground(const DrawXf& xf, const Rect& span) const {
+    // What lies flat on the ground: the banks' lips, then the trees' shadows.
+    const SDL_FRect bank = atlas(kBankCol, kCol, kBankPx);
+    const SDL_FRect shadow = atlas(kTreeShadowCol, kCol, 8);
+    for (int y = span.y; y < span.y + span.h; ++y) {
+        for (int x = span.x; x < span.x + span.w; ++x) {
+            const std::uint8_t m = marks_[cell_index(x, y)];
+            if ((m & kMarkBank) != 0) {
+                const SDL_FRect d = xf.rect(RectPx{x * kCellPx, y * kCellPx, kCellPx, kBankPx});
+                SDL_RenderTexture(renderer_, sprites_, &bank, &d);
+            }
+            if ((m & kMarkTree) != 0) {
+                const TreeAt t = tree_at(x, y);
+                const SDL_FRect d = xf.rect(RectPx{t.foot_x - t.size / 2 + 5,
+                                                   t.foot_y - t.size / 4 + 2, t.size, t.size / 2});
+                SDL_RenderTexture(renderer_, sprites_, &shadow, &d);
             }
         }
     }
+}
+
+void MapView::draw_standing(const DrawXf& xf, const Rect& span, bool sprites,
+                            const Fog& fog) const {
+    // Painter's order by row, north to south, so whatever stands nearer the viewer covers what
+    // stands behind it: in each row the cliff walls, then the trees whose foot is in it, then the
+    // core and the spawns when it's their foot row.
+    const int core_row =
+        core_ ? (rect_of(*core_, kCoreSub).y + kCoreSub * kSubPx - 1) / kCellPx : -1;
+    for (int y = span.y; y < span.y + span.h; ++y) {
+        if (sprites) {
+            for (int x = span.x; x < span.x + span.w; ++x) {
+                if ((marks_[cell_index(x, y)] & kMarkWall) == 0) {
+                    continue;
+                }
+                const std::uint32_t h = cell_hash(x, y);
+                const SDL_FRect s =
+                    atlas(kWallCol + static_cast<int>(h % kWallVariants), kCol, kCol);
+                const SDL_FRect d = xf.rect(RectPx{x * kCellPx, y * kCellPx, kCellPx, kCellPx});
+                SDL_RenderTexture(renderer_, sprites_, &s, &d);
+                // Where the run of wall ends, a darker edge.
+                SDL_SetRenderDrawColor(renderer_, 20, 18, 16, 90);
+                if (x == 0 || (marks_[cell_index(x - 1, y)] & kMarkWall) == 0) {
+                    const SDL_FRect e =
+                        xf.rect(RectPx{x * kCellPx, y * kCellPx, kWallEndPx, kCellPx});
+                    SDL_RenderFillRect(renderer_, &e);
+                }
+                if (x == kMapW - 1 || (marks_[cell_index(x + 1, y)] & kMarkWall) == 0) {
+                    const SDL_FRect e = xf.rect(
+                        RectPx{(x + 1) * kCellPx - kWallEndPx, y * kCellPx, kWallEndPx, kCellPx});
+                    SDL_RenderFillRect(renderer_, &e);
+                }
+            }
+            for (int x = span.x; x < span.x + span.w; ++x) {
+                if ((marks_[cell_index(x, y)] & kMarkTree) == 0) {
+                    continue;
+                }
+                const TreeAt t = tree_at(x, y);
+                const SDL_FRect s = atlas(t.variant, kCol, kAtlasH);
+                const SDL_FRect d = xf.rect(
+                    RectPx{t.foot_x - t.size / 2, t.foot_y - 2 * t.size + 1, t.size, 2 * t.size});
+                SDL_RenderTexture(renderer_, sprites_, &s, &d);
+            }
+        }
+        if (y == core_row) {
+            draw_core(xf);
+        }
+        for (const Spawn& s : spawns_) {
+            if (s.cell.y + 1 == y && (!fog_shown_ || fog.spawn_found(s))) {
+                draw_spawn(xf, s);
+            }
+        }
+    }
+}
+
+void MapView::draw_core(const DrawXf& xf) const {
+    // A placeholder reactor standing on its footprint: a shadow to the south-east, the front face
+    // rising from the footprint's south edge (with a glowing slit), and the top (frame, body,
+    // glowing heart) raised by its height.
+    const RectPx foot = rect_of(*core_, kCoreSub);
+    const SDL_FRect shade =
+        xf.rect(RectPx{foot.x + kBoxShadowPx, foot.y + kBoxShadowPx, foot.w, foot.h});
+    SDL_SetRenderDrawColor(renderer_, 10, 14, 10, 70);
+    SDL_RenderFillRect(renderer_, &shade);
+
+    const SDL_FRect front =
+        xf.rect(RectPx{foot.x, foot.y + foot.h - kCoreHeightPx, foot.w, kCoreHeightPx});
+    SDL_SetRenderDrawColor(renderer_, 40, 52, 74, 255);
+    SDL_RenderFillRect(renderer_, &front);
+    const SDL_FRect slit{front.x + 24.0f * xf.k, front.y + 9.0f * xf.k, front.w - 48.0f * xf.k,
+                         6.0f * xf.k};
+    SDL_SetRenderDrawColor(renderer_, 110, 230, 255, 255);
+    SDL_RenderFillRect(renderer_, &slit);
+    SDL_SetRenderDrawColor(renderer_, 90, 130, 160, 255);
+    SDL_RenderRect(renderer_, &front);
+
+    const SDL_FRect frame = xf.rect(RectPx{foot.x, foot.y - kCoreHeightPx, foot.w, foot.h});
+    SDL_SetRenderDrawColor(renderer_, 28, 34, 52, 255);
+    SDL_RenderFillRect(renderer_, &frame);
+    const float b = 4.0f * xf.k;
+    const SDL_FRect body{frame.x + b, frame.y + b, frame.w - 2.0f * b, frame.h - 2.0f * b};
+    SDL_SetRenderDrawColor(renderer_, 70, 96, 128, 255);
+    SDL_RenderFillRect(renderer_, &body);
+    const float hrt = 24.0f * xf.k;
+    const SDL_FRect heart{frame.x + hrt, frame.y + hrt, frame.w - 2.0f * hrt, frame.h - 2.0f * hrt};
+    SDL_SetRenderDrawColor(renderer_, 110, 230, 255, 255);
+    SDL_RenderFillRect(renderer_, &heart);
+    SDL_SetRenderDrawColor(renderer_, 140, 200, 230, 255);
+    SDL_RenderRect(renderer_, &frame);
+}
+
+void MapView::draw_spawn(const DrawXf& xf, const Spawn& s) const {
+    // A red placeholder gate standing on its 2 x 2 cells: a shadow, the front face with a dark
+    // opening, and the top raised by its height.
+    const RectPx foot{s.cell.x * kCellPx, s.cell.y * kCellPx, 2 * kCellPx, 2 * kCellPx};
+    const SDL_FRect shade =
+        xf.rect(RectPx{foot.x + kBoxShadowPx, foot.y + kBoxShadowPx, foot.w, foot.h});
+    SDL_SetRenderDrawColor(renderer_, 10, 14, 10, 70);
+    SDL_RenderFillRect(renderer_, &shade);
+
+    const SDL_FRect front =
+        xf.rect(RectPx{foot.x, foot.y + foot.h - kSpawnHeightPx, foot.w, kSpawnHeightPx});
+    SDL_SetRenderDrawColor(renderer_, 150, 40, 34, 255);
+    SDL_RenderFillRect(renderer_, &front);
+    const SDL_FRect gate{front.x + 9.0f * xf.k, front.y + 3.0f * xf.k, front.w - 18.0f * xf.k,
+                         front.h - 3.0f * xf.k};
+    SDL_SetRenderDrawColor(renderer_, 40, 12, 18, 255);
+    SDL_RenderFillRect(renderer_, &gate);
+
+    const SDL_FRect top = xf.rect(spawn_top(s));
+    SDL_SetRenderDrawColor(renderer_, 220, 64, 52, 255);
+    SDL_RenderFillRect(renderer_, &top);
+    SDL_SetRenderDrawColor(renderer_, 255, 190, 120, 255);
+    SDL_RenderRect(renderer_, &top);
 }
 
 void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_left, bool legal,

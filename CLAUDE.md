@@ -118,6 +118,8 @@ runs the unit tests only when the push changes a system or object (`tools/ci-sco
   zooming out past 1x (halving steps, then the whole map): those steps draw shrunk and smooth.
   The terrain is one cell-sized texture (one colour per cell, ~2 MB at any map size) stretched by
   the GPU with linear filtering, so it's seamless; never bake a full-size picture of the map.
+  - **3/4 view (#35):** oblique, looks only. Cliff walls, trees, the core and spawns are drawn
+    standing, row by row from north to south, over the flat grid; every rule stays on the grid.
   - **Grid:** a hidden grid of 16 px cells for terrain, line of sight and pathfinding; the terrain
     itself is drawn seamless (no tiles or grid lines). Towers and the core snap to an 8 px
     placement subgrid: a light tower is 3x3 subcells (24 px), a heavy tower 6x6 (48 px), and the

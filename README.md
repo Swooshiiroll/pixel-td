@@ -39,6 +39,7 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - `--map-shot f.bmp` saves the whole map and exits (fully explored, unless probes are given), at `--map-scale 2|4|8` (default 4: 3840x2160).
   - `--probe X,Y` places a probe with its top-left at subcell X,Y (the 8 px placement subgrid; repeatable).
   - `--zoom whole|half|N` starts at the whole map, the 1/2 step or the whole-number scale N.
+  - `--look X,Y` starts with the camera centred on cell X,Y.
   - `--no-fog` starts with the fog hidden.
   - `--window WxH` opens the window at that size (for screenshots).
   - `--preset FILE` generates with the settings in a preset file; `--panel` opens the tuning panel at start.
