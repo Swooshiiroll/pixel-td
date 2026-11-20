@@ -33,7 +33,15 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
     sight, and lifts the fog);
   - O and Shift+O step through the overlays (the mountain, fertility and moisture noise layers);
   - F hides and shows the fog;
-  - Tab opens the map-tuning panel (seed, every generator and noise setting, live stats, presets).
+  - Tab opens the map-tuning panel (seed, every generator and noise setting, live stats, presets,
+    and the enemies' and blocks' numbers).
+- **Pathfinding (phase 1, placeholders):**
+  - B cycles build mode: off, light block, heavy block. A left-click places a block, a right-click
+    removes one.
+  - E sends a walker from every spawn; Shift+E toggles a steady stream.
+  - R shows each spawn's route to the core, with its walk time. A sealed spawn's route is orange,
+    and the block its walkers will break is outlined.
+  - Hovering a walker shows its speed, health and state. The HUD shows the core's health.
 - **Developer flags:**
   - `--seed N` uses seed N (decimal, or hex with `0x`).
   - `--map-shot f.bmp` saves the whole map and exits (fully explored, unless probes are given), at `--map-scale 2|4|8` (default 4: 3840x2160).
@@ -41,6 +49,8 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - `--zoom whole|half|N` starts at the whole map, the 1/2 step or the whole-number scale N.
   - `--look X,Y` starts with the camera centred on cell X,Y.
   - `--no-fog` starts with the fog hidden.
+  - `--block X,Y` / `--heavy X,Y` place a light / heavy block at subcell X,Y (repeatable);
+    `--send` sends walkers at start, `--stream` starts the stream, `--routes` shows the routes.
   - `--window WxH` opens the window at that size (for screenshots).
   - `--preset FILE` generates with the settings in a preset file; `--panel` opens the tuning panel at start.
   - `--overlay NAME` starts in an overlay: `mountain`, `fertility` or `moisture`.

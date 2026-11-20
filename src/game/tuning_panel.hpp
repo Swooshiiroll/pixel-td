@@ -7,6 +7,7 @@
 
 #include "core/gen_params.hpp"
 #include "core/map.hpp"
+#include "core/sim_params.hpp"
 
 namespace pixeltd::game {
 
@@ -46,9 +47,13 @@ class TuningPanel {
     void set_open(bool open) noexcept { open_ = open; }
     [[nodiscard]] bool open() const noexcept { return open_; }
 
-    // Draws the panel (between ImGui::NewFrame and ImGui::Render), editing `params` and `seed`.
-    // `top` is where the window starts (below the HUD bar), in window pixels.
-    Change draw(GenParams& params, std::uint64_t& seed, const MapStats& stats, float top);
+    // Draws the panel (between ImGui::NewFrame and ImGui::Render), editing `params` and `seed`,
+    // and the walkers' and blocks' numbers in `sim` (#11; sim_changed() says if they changed,
+    // which needs no new map). `top` is where the window starts (below the HUD bar), in window
+    // pixels.
+    Change draw(GenParams& params, std::uint64_t& seed, const MapStats& stats, float top,
+                SimParams& sim);
+    [[nodiscard]] bool sim_changed() const noexcept { return sim_changed_; }
 
   private:
     bool slider(const char* label, int* v, int lo, int hi);
@@ -59,6 +64,7 @@ class TuningPanel {
     bool open_ = false;
     bool preview_ = false; // set by widgets during draw()
     bool commit_ = false;
+    bool sim_changed_ = false;
     std::vector<std::string> presets_;
     bool presets_listed_ = false;
     std::array<char, 64> preset_name_{};

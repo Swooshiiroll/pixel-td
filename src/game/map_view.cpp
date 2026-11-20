@@ -47,20 +47,27 @@ constexpr std::uint8_t kHazeAlpha = 115; // 0.45 * 255
 // the cell colours carry them. Trees stand on their cell (the foot at the bottom, the canopy
 // rising over the cells behind); a cliff wall covers the open cell south of rock; a bank lip sits
 // on the top edge of water below dry land, so the water lies lower than the ground.
-constexpr int kCol = 16;             // an atlas column: one cell wide
-constexpr int kAtlasH = 32;          // the tallest sprite (a tree)
-constexpr int kTreeVariants = 3;     // columns 0-2: trees, 16 x 32
-constexpr int kTreeShadowCol = 3;    // column 3: a tree's shadow, a soft ellipse 16 x 8
-constexpr int kWallCol = 4;          // columns 4-7: cliff walls, 16 x 16
-constexpr int kWallVariants = 4;     //
-constexpr int kBankCol = 8;          // column 8: the bank lip, 16 x kBankPx
-constexpr int kBankPx = 5;           //
-constexpr int kAtlasCols = 9;        //
-constexpr float kSpritesFrom = 0.5f; // the farthest zoom that draws them
-constexpr int kWallEndPx = 2;        // the darker edge where a wall run ends
-constexpr int kCoreHeightPx = 24;    // how tall the core stands
-constexpr int kSpawnHeightPx = 16;   // how tall a spawn stands
-constexpr int kBoxShadowPx = 6;      // the core's and spawns' shadow, to the south-east
+constexpr int kCol = 16;                // an atlas column: one cell wide
+constexpr int kAtlasH = 32;             // the tallest sprite (a tree)
+constexpr int kTreeVariants = 3;        // columns 0-2: trees, 16 x 32
+constexpr int kTreeShadowCol = 3;       // column 3: a tree's shadow, a soft ellipse 16 x 8
+constexpr int kWallCol = 4;             // columns 4-7: cliff walls, 16 x 16
+constexpr int kWallVariants = 4;        //
+constexpr int kBankCol = 8;             // column 8: the bank lip, 16 x kBankPx
+constexpr int kBankPx = 5;              //
+constexpr int kWalkerCol = 9;           // column 9: a walker (#11), 16 x 16, a violet beetle
+constexpr int kAtlasCols = 10;          //
+constexpr float kSpritesFrom = 0.5f;    // the farthest zoom that draws them
+constexpr int kWallEndPx = 2;           // the darker edge where a wall run ends
+constexpr int kCoreHeightPx = 24;       // how tall the core stands
+constexpr int kSpawnHeightPx = 16;      // how tall a spawn stands
+constexpr int kBoxShadowPx = 6;         // the core's and spawns' shadow, to the south-east
+constexpr int kLightBlockHeightPx = 12; // how tall the placeholder blocks stand (#11)
+constexpr int kHeavyBlockHeightPx = 20; //
+
+constexpr int block_height(BlockKind k) noexcept {
+    return k == BlockKind::Light ? kLightBlockHeightPx : kHeavyBlockHeightPx;
+}
 
 // What a cell carries for the sprites.
 constexpr std::uint8_t kMarkTree = 1;
@@ -248,6 +255,33 @@ bool MapView::create_sprites() {
         }
     }
 
+    // A walker (#11, placeholder): a violet beetle seen from the 3/4 angle, its body a lit oval
+    // with a dark rim, a head to the north with two hot eyes, and three legs a side.
+    for (int y = 0; y < kCol; ++y) {
+        for (int x = 0; x < kCol; ++x) {
+            const float fx = static_cast<float>(x) - 7.5f;
+            const float body =
+                (fx / 5.5f) * (fx / 5.5f) +
+                ((static_cast<float>(y) - 9.5f) / 4.8f) * ((static_cast<float>(y) - 9.5f) / 4.8f);
+            const float head =
+                (fx / 3.0f) * (fx / 3.0f) +
+                ((static_cast<float>(y) - 4.0f) / 2.6f) * ((static_cast<float>(y) - 4.0f) / 2.6f);
+            const int ox = kCol * kWalkerCol + x;
+            if (body <= 1.0f) {
+                const float lit =
+                    std::clamp(1.15f - (fx + static_cast<float>(y) - 9.5f) * 0.05f, 0.7f, 1.3f);
+                const float k = (body > 0.7f ? 0.55f : 1.0f) * lit;
+                put(ox, y, 92.0f * k, 54.0f * k, 124.0f * k, 255);
+            } else if (head <= 1.0f) {
+                put(ox, y, 46.0f, 28.0f, 64.0f, 255);
+            } else if ((y == 8 || y == 10 || y == 12) && (x == 1 || x == 14)) {
+                put(ox, y, 30.0f, 18.0f, 40.0f, 255); // legs
+            }
+        }
+    }
+    put(kCol * kWalkerCol + 6, 3, 255.0f, 120.0f, 90.0f, 255); // eyes
+    put(kCol * kWalkerCol + 9, 3, 255.0f, 120.0f, 90.0f, 255);
+
     sprites_ =
         SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kW, kAtlasH);
     if (sprites_ == nullptr || !SDL_UpdateTexture(sprites_, nullptr, px.data(), kW * 4)) {
@@ -431,7 +465,7 @@ bool MapView::update_fog(const Fog& fog, const Rect& cells) {
     return true;
 }
 
-void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
+void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog, const Sim& sim) const {
     // The part of the map under the camera, in world pixels. When the view is bigger than the map
     // (centred, so the camera is negative), clip it to the map.
     float sx = static_cast<float>(xf.cam.x);
@@ -469,7 +503,7 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog) const {
     if (sprites) {
         draw_ground(xf, span);
     }
-    draw_standing(xf, span, sprites, fog);
+    draw_standing(xf, span, sprites, fog, sim);
 
     // Fog: one texel per cell, stretched with linear filtering.
     if (fog_shown_ && core_) {
@@ -514,13 +548,48 @@ void MapView::draw_ground(const DrawXf& xf, const Rect& span) const {
     }
 }
 
-void MapView::draw_standing(const DrawXf& xf, const Rect& span, bool sprites,
-                            const Fog& fog) const {
+void MapView::draw_standing(const DrawXf& xf, const Rect& span, bool sprites, const Fog& fog,
+                            const Sim& sim) const {
     // Painter's order by row, north to south, so whatever stands nearer the viewer covers what
     // stands behind it: in each row the cliff walls, then the trees whose foot is in it, then the
-    // core and the spawns when it's their foot row.
+    // spawns, blocks and walkers, then the core when it's its foot row.
     const int core_row =
         core_ ? (rect_of(*core_, kCoreSub).y + kCoreSub * kSubPx - 1) / kCellPx : -1;
+
+    // The blocks and the visible walkers in view, sorted into their foot rows.
+    standing_.clear();
+    const auto in_span = [&](int cx0, int cx1, int row) {
+        return row >= span.y && row < span.y + span.h && cx1 >= span.x && cx0 < span.x + span.w;
+    };
+    for (std::size_t i = 0; i < sim.blocks().size(); ++i) {
+        const Block& b = sim.blocks()[i];
+        if (!b.alive) {
+            continue;
+        }
+        const RectPx r = rect_of(b.top_left, b.size_sub());
+        const int row = (r.y + r.h - 1) / kCellPx;
+        if (in_span(r.x / kCellPx, (r.x + r.w - 1) / kCellPx, row)) {
+            standing_.push_back({row, 0, static_cast<int>(i)});
+        }
+    }
+    for (std::size_t i = 0; i < sim.walkers().size(); ++i) {
+        const PointPx c = sim.walkers()[i].centre();
+        const Cell at{c.x / kCellPx, c.y / kCellPx};
+        if (fog_shown_ && core_ && !fog.explored(at)) {
+            continue; // hidden on unexplored ground
+        }
+        const int row = (c.y + kSubPx - 1) / kCellPx;
+        if (in_span(at.x, at.x, row)) {
+            standing_.push_back({row, 1, static_cast<int>(i)});
+        }
+    }
+    std::sort(standing_.begin(), standing_.end(), [](const Standing& a, const Standing& b) {
+        return a.row != b.row     ? a.row < b.row
+               : a.kind != b.kind ? a.kind < b.kind
+                                  : a.index < b.index;
+    });
+    std::size_t next_standing = 0;
+
     for (int y = span.y; y < span.y + span.h; ++y) {
         if (sprites) {
             for (int x = span.x; x < span.x + span.w; ++x) {
@@ -556,13 +625,24 @@ void MapView::draw_standing(const DrawXf& xf, const Rect& span, bool sprites,
                 SDL_RenderTexture(renderer_, sprites_, &s, &d);
             }
         }
-        if (y == core_row) {
-            draw_core(xf);
-        }
+        // Spawns before the walkers in their row, so walkers coming out stand in front of them.
         for (const Spawn& s : spawns_) {
             if (s.cell.y + 1 == y && (!fog_shown_ || fog.spawn_found(s))) {
                 draw_spawn(xf, s);
             }
+        }
+        for (; next_standing < standing_.size() && standing_[next_standing].row == y;
+             ++next_standing) {
+            const Standing& st = standing_[next_standing];
+            const auto i = static_cast<std::size_t>(st.index);
+            if (st.kind == 0) {
+                draw_block(xf, sim.blocks()[i]);
+            } else {
+                draw_walker(xf, sim.walkers()[i], sim.params().walker_health);
+            }
+        }
+        if (y == core_row) {
+            draw_core(xf);
         }
     }
 }
@@ -626,6 +706,152 @@ void MapView::draw_spawn(const DrawXf& xf, const Spawn& s) const {
     SDL_RenderFillRect(renderer_, &top);
     SDL_SetRenderDrawColor(renderer_, 255, 190, 120, 255);
     SDL_RenderRect(renderer_, &top);
+}
+
+void MapView::draw_health(const DrawXf& xf, int x, int y, int w, int health, int max_health) const {
+    if (max_health <= 0 || health >= max_health) {
+        return;
+    }
+    const int filled = std::clamp(w * std::max(0, health) / max_health, 0, w);
+    const SDL_FRect back = xf.rect(RectPx{x - 1, y - 1, w + 2, 4});
+    SDL_SetRenderDrawColor(renderer_, 16, 12, 12, 200);
+    SDL_RenderFillRect(renderer_, &back);
+    const SDL_FRect bar = xf.rect(RectPx{x, y, filled, 2});
+    if (health * 3 > max_health) {
+        SDL_SetRenderDrawColor(renderer_, 120, 230, 110, 255);
+    } else {
+        SDL_SetRenderDrawColor(renderer_, 240, 90, 60, 255);
+    }
+    SDL_RenderFillRect(renderer_, &bar);
+}
+
+void MapView::draw_block(const DrawXf& xf, const Block& b) const {
+    // A placeholder block standing on its footprint, like the core: a shadow, the front face, and
+    // the top raised by its height; a health bar once it's damaged.
+    const RectPx foot = rect_of(b.top_left, b.size_sub());
+    const int h = block_height(b.kind);
+    const SDL_FRect shade = xf.rect(RectPx{foot.x + 4, foot.y + 4, foot.w, foot.h});
+    SDL_SetRenderDrawColor(renderer_, 10, 14, 10, 70);
+    SDL_RenderFillRect(renderer_, &shade);
+    const SDL_FRect front = xf.rect(RectPx{foot.x, foot.y + foot.h - h, foot.w, h});
+    SDL_SetRenderDrawColor(renderer_, 84, 88, 96, 255);
+    SDL_RenderFillRect(renderer_, &front);
+    const SDL_FRect top = xf.rect(RectPx{foot.x, foot.y - h, foot.w, foot.h});
+    SDL_SetRenderDrawColor(renderer_, 128, 134, 142, 255);
+    SDL_RenderFillRect(renderer_, &top);
+    const SDL_FRect inner = xf.rect(RectPx{foot.x + 3, foot.y - h + 3, foot.w - 6, foot.h - 6});
+    SDL_SetRenderDrawColor(renderer_, 150, 156, 164, 255);
+    SDL_RenderFillRect(renderer_, &inner);
+    SDL_SetRenderDrawColor(renderer_, 40, 44, 50, 255);
+    SDL_RenderRect(renderer_, &top);
+    SDL_RenderRect(renderer_, &front);
+    draw_health(xf, foot.x + 3, foot.y - h + 2, foot.w - 6, b.health(), b.max_health);
+}
+
+void MapView::draw_walker(const DrawXf& xf, const Walker& w, int max_health) const {
+    // The beetle stands on its 16 px square: a small shadow, the sprite rising a little over the
+    // square behind, and a health bar over it once it's hurt.
+    const PointPx c = w.centre();
+    if (sprites_ != nullptr) {
+        const SDL_FRect shadow_src = atlas(kTreeShadowCol, kCol, 8);
+        const SDL_FRect shadow = xf.rect(RectPx{c.x - 5, c.y + 3, 12, 5});
+        SDL_RenderTexture(renderer_, sprites_, &shadow_src, &shadow);
+        const SDL_FRect src = atlas(kWalkerCol, kCol, kCol);
+        const SDL_FRect d = xf.rect(RectPx{c.x - 8, c.y - 10, kCol, kCol});
+        SDL_RenderTexture(renderer_, sprites_, &src, &d);
+    }
+    if (w.state == WalkerState::Breaking) {
+        // A spark where it bites.
+        SDL_SetRenderDrawColor(renderer_, 255, 210, 120, 230);
+        const SDL_FRect spark = xf.rect(RectPx{c.x + 3, c.y - 12, 2, 2});
+        SDL_RenderFillRect(renderer_, &spark);
+    }
+    draw_health(xf, c.x - 6, c.y - 13, 12, w.health, max_health);
+}
+
+void MapView::draw_block_preview(const DrawXf& xf, SubCell top_left, BlockKind kind,
+                                 bool legal) const {
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    const RectPx foot = rect_of(top_left, block_size_sub(kind));
+    const SDL_FRect r = xf.rect(foot);
+    if (legal) {
+        SDL_SetRenderDrawColor(renderer_, 120, 230, 140, 110);
+    } else {
+        SDL_SetRenderDrawColor(renderer_, 240, 80, 60, 130);
+    }
+    SDL_RenderFillRect(renderer_, &r);
+    SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 220);
+    SDL_RenderRect(renderer_, &r);
+}
+
+void MapView::draw_routes(const DrawXf& xf, const Fog& fog, const Sim& sim) const {
+    // Recomputed only when the sim has rebuilt its routes.
+    if (routes_build_ != sim.route_builds() || routes_.size() != spawns_.size()) {
+        routes_.resize(spawns_.size());
+        for (std::size_t i = 0; i < spawns_.size(); ++i) {
+            ShownRoute& sr = routes_[i];
+            sr.route = sim.route_from(spawns_[i]);
+            sr.length_px = 0.0f;
+            for (std::size_t n = 1; n < sr.route.nodes.size(); ++n) {
+                const SubCell a = sr.route.nodes[n - 1];
+                const SubCell b = sr.route.nodes[n];
+                sr.length_px += (a.x != b.x && a.y != b.y) ? 11.3137f : 8.0f;
+            }
+        }
+        routes_build_ = sim.route_builds();
+    }
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    for (std::size_t i = 0; i < spawns_.size(); ++i) {
+        if (fog_shown_ && !fog.spawn_found(spawns_[i])) {
+            continue;
+        }
+        const ShownRoute& sr = routes_[i];
+        route_points_.clear();
+        for (const SubCell n : sr.route.nodes) {
+            const PointPx p = node_centre(n);
+            route_points_.push_back({xf.x(static_cast<float>(p.x)), xf.y(static_cast<float>(p.y))});
+        }
+        if (sr.route.sealed) {
+            SDL_SetRenderDrawColor(renderer_, 255, 150, 60, 230);
+        } else {
+            SDL_SetRenderDrawColor(renderer_, 110, 220, 255, 220);
+        }
+        if (route_points_.size() >= 2) {
+            SDL_RenderLines(renderer_, route_points_.data(),
+                            static_cast<int>(route_points_.size()));
+        }
+        // The breach marker: the block this spawn's walkers will attack.
+        if (sr.route.sealed && sr.route.breach_block >= 0 &&
+            static_cast<std::size_t>(sr.route.breach_block) < sim.blocks().size()) {
+            const Block& b = sim.blocks()[static_cast<std::size_t>(sr.route.breach_block)];
+            if (b.alive) {
+                const RectPx foot = rect_of(b.top_left, b.size_sub());
+                const int h = block_height(b.kind);
+                SDL_SetRenderDrawColor(renderer_, 255, 90, 40, 255);
+                for (int g = 1; g <= 2; ++g) {
+                    const SDL_FRect m = xf.rect(
+                        RectPx{foot.x - g, foot.y - h - g, foot.w + 2 * g, foot.h + h + 2 * g});
+                    SDL_RenderRect(renderer_, &m);
+                }
+            }
+        }
+        // Its length and walk time, under the spawn.
+        char label[64];
+        const double seconds = static_cast<double>(sim.cost_ms(sr.route.cost)) / 1000.0;
+        if (sr.route.nodes.empty()) {
+            std::snprintf(label, sizeof label, "no route");
+        } else if (sr.route.sealed) {
+            std::snprintf(label, sizeof label, "SEALED: breach %.0f cells %.0f s",
+                          static_cast<double>(sr.length_px) / kCellPx, seconds);
+        } else {
+            std::snprintf(label, sizeof label, "route %.0f cells %.0f s",
+                          static_cast<double>(sr.length_px) / kCellPx, seconds);
+        }
+        const Spawn& s = spawns_[i];
+        SDL_SetRenderDrawColor(renderer_, 255, 240, 220, 255);
+        SDL_RenderDebugText(renderer_, xf.x(static_cast<float>(s.cell.x * kCellPx)),
+                            xf.y(static_cast<float>((s.cell.y + 2) * kCellPx + 4)), label);
+    }
 }
 
 void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_left, bool legal,
