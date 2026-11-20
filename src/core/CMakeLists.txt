@@ -3,11 +3,14 @@ add_library(pixeltd_core STATIC
   camera.cpp
   fog.cpp
   fixed_step.cpp
+  flow.cpp
   los.cpp
   gen_params.cpp
   mapgen.cpp
   overlay.cpp
   preset.cpp
+  sim.cpp
+  sim_params.cpp
   simplex.cpp
   terrain.cpp)
 target_include_directories(pixeltd_core PUBLIC ${PROJECT_SOURCE_DIR}/src)
