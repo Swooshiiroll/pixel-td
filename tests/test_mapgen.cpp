@@ -1,6 +1,7 @@
 #include "core/mapgen.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
@@ -16,10 +17,13 @@ namespace {
 
 std::uint64_t map_hash(const Map& m) {
     Fnv1a h;
-    for (const Material v : m.material.cells()) {
+    for (const Ground v : m.ground.cells()) {
         h.add_byte(static_cast<std::uint8_t>(v));
     }
-    for (const std::uint8_t v : m.formation.cells()) {
+    for (const Plant v : m.plant.cells()) {
+        h.add_byte(static_cast<std::uint8_t>(v));
+    }
+    for (const std::uint8_t v : m.rock.cells()) {
         h.add_byte(v);
     }
     h.add_int(m.core ? m.core->x : -1);
@@ -52,7 +56,7 @@ void check_map(const Map& m, const GenParams& p) {
         for (int y = s.cell.y; y < s.cell.y + 2; ++y) {
             for (int x = s.cell.x; x < s.cell.x + 2; ++x) {
                 REQUIRE(dist.in_bounds(x, y));
-                REQUIRE_FALSE(is_formation(m, {x, y}));
+                REQUIRE_FALSE(is_rock(m, {x, y}));
                 REQUIRE(dist.at(x, y) >= 0);
             }
         }
@@ -64,11 +68,17 @@ void check_map(const Map& m, const GenParams& p) {
         }
     }
 
-    int formation = 0;
-    for (const std::uint8_t f : m.formation.cells()) {
-        formation += f != 0 ? 1 : 0;
+    // No sealed pockets: every walkable cell is reachable from the core.
+    int sealed = 0;
+    const Rect core_cells = cells_under(*m.core, kCoreSub);
+    for (int y = 0; y < kMapH; ++y) {
+        for (int x = 0; x < kMapW; ++x) {
+            sealed +=
+                is_walkable(m, {x, y}) && dist.at(x, y) < 0 && !core_cells.contains(Cell{x, y}) ? 1
+                                                                                                : 0;
+        }
     }
-    REQUIRE(formation * 100 <= p.formation_share_max_pct * kCells);
+    REQUIRE(sealed == 0);
 }
 
 } // namespace
@@ -76,8 +86,8 @@ void check_map(const Map& m, const GenParams& p) {
 TEST_CASE("the map is deterministic") {
     const Map a = generate_map(42);
     const Map b = generate_map(42);
-    CHECK(a.material == b.material);
-    CHECK(a.formation == b.formation);
+    CHECK(a.ground == b.ground);
+    CHECK(a.rock == b.rock);
     CHECK(a.core == b.core);
     CHECK(a.spawns == b.spawns);
     CHECK(map_hash(a) == map_hash(b));
@@ -94,17 +104,49 @@ TEST_CASE("different seeds give different maps") {
 
 // Pinned results: these must match on every compiler and platform (MSVC locally, GCC on CI). If
 // the generator is changed on purpose, update the values in the same pull request and say why.
-// Last re-pinned in #30: the map is flat (no heights), with twice the rock formations.
+// Last re-pinned in #32: mountains with caves, a river and lakes, ground types and plants.
 TEST_CASE("golden maps") {
-    CHECK(map_hash(generate_map(1)) == 0x923b6017e5d21c77ull);
-    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0x517ad651bf1abd2dull);
-    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0x496a806e05fea5bdull);
+    CHECK(map_hash(generate_map(1)) == 0x926dc8ea1e09959bull);
+    CHECK(map_hash(generate_map(0xC0FFEEull)) == 0x922cac881cabaa73ull);
+    CHECK(map_hash(generate_map(0xFFFFFFFFFFFFFFFFull)) == 0xf6e3c4814441fbc5ull);
 }
 
-TEST_CASE("rock formations can't be walked through or built on; open ground can") {
+TEST_CASE("water, wet ground and trees: what can be walked and built on") {
     Map m = make_fallback_map(1);
-    m.formation.at(30, 30) = 1;
-    CHECK(is_formation(m, {30, 30}));
+    const Cell c{40, 40};
+    const auto set = [&](Ground g, Plant pl) {
+        m.ground.at(c) = g;
+        m.plant.at(c) = pl;
+    };
+    set(Ground::Deep, Plant::None);
+    CHECK_FALSE(is_walkable(m, c));
+    CHECK_FALSE(is_buildable(m, c));
+    CHECK_FALSE(can_step(m, {39, 40}, c));
+    set(Ground::Shallow, Plant::None);
+    CHECK(is_walkable(m, c));
+    CHECK_FALSE(is_buildable(m, c));
+    for (const Ground g : {Ground::Mud, Ground::Marsh}) {
+        set(g, Plant::None);
+        CHECK(is_walkable(m, c));
+        CHECK_FALSE(is_buildable(m, c));
+    }
+    for (const Ground g : {Ground::Soil, Ground::RichSoil, Ground::Sand, Ground::Gravel}) {
+        set(g, Plant::Grass);
+        CHECK(is_walkable(m, c));
+        CHECK(is_buildable(m, c));
+    }
+    set(Ground::Soil, Plant::Tree);
+    CHECK(is_walkable(m, c));
+    CHECK_FALSE(is_buildable(m, c));
+    CHECK_FALSE(footprint_ok(m, {39, 39}, 2));
+    set(Ground::Soil, Plant::Bush);
+    CHECK(footprint_ok(m, {39, 39}, 2));
+}
+
+TEST_CASE("rock can't be walked through or built on; open ground can") {
+    Map m = make_fallback_map(1);
+    m.rock.at(30, 30) = 1;
+    CHECK(is_rock(m, {30, 30}));
     CHECK_FALSE(can_step(m, {29, 30}, {30, 30}));
     CHECK_FALSE(can_step(m, {30, 30}, {31, 30}));
     CHECK_FALSE(footprint_ok(m, {29, 29}, 2));
@@ -130,10 +172,10 @@ TEST_CASE("footprints on the 8 px subgrid cover the cells under them") {
 TEST_CASE("a placement is refused if any cell under it is bad") {
     Map m = make_fallback_map(1);
     CHECK(placement_ok(m, SubCell{21, 21}, kLightSub)); // covers cells 10..11
-    m.formation.at(12, 12) = 1;                         // just outside it
+    m.rock.at(12, 12) = 1;                              // just outside it
     CHECK(placement_ok(m, SubCell{21, 21}, kLightSub));
     CHECK_FALSE(placement_ok(m, SubCell{22, 22}, kLightSub)); // now covers cell 12, 12
-    m.formation.at(30, 30) = 1;
+    m.rock.at(30, 30) = 1;
     CHECK_FALSE(placement_ok(m, SubCell{58, 58}, kHeavySub)); // cells 29..31
     CHECK(placement_ok(m, SubCell{50, 50}, kHeavySub));
     CHECK_FALSE(placement_ok(m, SubCell{-1, 5}, kLightSub));        // off the subgrid
@@ -150,7 +192,7 @@ TEST_CASE("walking distance goes around rock formations") {
             const bool ring = y == core.y - 4 || y == core.y + core.h + 3 || x == core.x - 4 ||
                               x == core.x + core.w + 3;
             if (ring) {
-                m.formation.at(x, y) = 1;
+                m.rock.at(x, y) = 1;
             }
         }
     }
@@ -159,6 +201,78 @@ TEST_CASE("walking distance goes around rock formations") {
     CHECK(dist.at(core.x - 3, core.y) == 2);
     CHECK(dist.at(0, 0) < 0);
     CHECK(dist.at(core.x, core.y) < 0); // the core's own cells aren't walked
+}
+
+TEST_CASE("mountains: about their share, mostly near the edges, never by the core") {
+    const GenParams p;
+    long long rock = 0;
+    long long edge_rock = 0;
+    long long edge_cells = 0;
+    long long middle_rock = 0;
+    long long middle_cells = 0;
+    constexpr int kSeeds = 6;
+    for (std::uint64_t seed = 1; seed <= kSeeds; ++seed) {
+        const Map m = generate_map(seed, p);
+        REQUIRE_FALSE(m.stats.fallback);
+        for (int y = 0; y < kMapH; ++y) {
+            for (int x = 0; x < kMapW; ++x) {
+                const bool r = m.rock.at(x, y) != 0;
+                rock += r ? 1 : 0;
+                const int d = std::min({x, y, kMapW - 1 - x, kMapH - 1 - y});
+                if (d < 60) {
+                    edge_rock += r ? 1 : 0;
+                    ++edge_cells;
+                } else if (d >= 150) {
+                    middle_rock += r ? 1 : 0;
+                    ++middle_cells;
+                }
+                const Rect& a = p.core_area;
+                if (x >= a.x && x < a.x + a.w && y >= a.y && y < a.y + a.h) {
+                    REQUIRE(m.rock.at(x, y) == 0);
+                }
+            }
+        }
+    }
+    const long long share_pct = rock * 100 / (static_cast<long long>(kSeeds) * kCells);
+    CAPTURE(share_pct);
+    CHECK(share_pct >= p.mountain_share_pct - 5);
+    CHECK(share_pct <= p.mountain_share_pct + 5);
+    CHECK(edge_rock * middle_cells > 2 * middle_rock * edge_cells); // twice as rocky by the edges
+}
+
+TEST_CASE("rivers run edge to edge with fords; caves open into the mountains") {
+    const GenParams p;
+    int rivers = 0;
+    int caves = 0;
+    for (std::uint64_t seed = 1; seed <= 8; ++seed) {
+        CAPTURE(seed);
+        GenLayers L;
+        const Map m = generate_map(seed, p, &L);
+        REQUIRE(L.valid);
+        caves += L.caves > 0 ? 1 : 0;
+        if (L.river.empty()) {
+            continue;
+        }
+        ++rivers;
+        const Cell a = L.river.front();
+        const Cell b = L.river.back();
+        const bool across = a.x == 0 && b.x >= kMapW - 2;
+        const bool down = a.y == 0 && b.y >= kMapH - 2;
+        CHECK((across || down));
+        CHECK(static_cast<int>(L.fords.size()) >= p.fords_min);
+        CHECK(static_cast<int>(L.fords.size()) <= p.fords_max);
+        for (const Cell f : L.fords) {
+            CHECK(m.ground.at(f) == Ground::Shallow); // walkable across
+        }
+        // Away from the fords the middle is deep water.
+        int deep = 0;
+        for (const Cell c : L.river) {
+            deep += m.ground.at(c) == Ground::Deep ? 1 : 0;
+        }
+        CHECK(deep * 2 > static_cast<int>(L.river.size()));
+    }
+    CHECK(rivers >= 4); // 80% of maps
+    CHECK(caves >= 4);
 }
 
 TEST_CASE("the fallback map is valid") {
@@ -207,7 +321,7 @@ TEST_CASE("map stats (manual)" * doctest::skip()) {
         }
         for (int y = 0; y < kMapH; ++y) {
             for (int x = 0; x < kMapW; ++x) {
-                formation += m.formation.at(x, y) != 0 ? 1 : 0;
+                formation += m.rock.at(x, y) != 0 ? 1 : 0;
                 buildable +=
                     x % 2 == 0 && y % 2 == 0 && placement_ok(m, SubCell{x * 2, y * 2}, kLightSub)
                         ? 1
@@ -222,4 +336,42 @@ TEST_CASE("map stats (manual)" * doctest::skip()) {
             "  light spots buildable % ", 400.0 * static_cast<double>(buildable) / cells);
     MESSAGE("edge spawns % ", 100.0 * edge_spawns / (3.0 * kSeeds), "  spawn walk avg ",
             static_cast<double>(spawn_dist) / (3.0 * kSeeds));
+}
+
+// Manual timing aid (#32): what each generator stage costs, by turning stages off one at a time.
+// pixeltd_tests -tc="*stage timing*" --no-skip
+TEST_CASE("stage timing (manual)" * doctest::skip()) {
+    struct Case {
+        const char* name;
+        void (*tweak)(GenParams&);
+    };
+    const Case cases[] = {
+        {"everything", [](GenParams&) {}},
+        {"no caves", [](GenParams& p) { p.cave_share_pct = 0; }},
+        {"no river", [](GenParams& p) { p.river_pct = 0; }},
+        {"no lakes", [](GenParams& p) { p.lakes_min = p.lakes_max = 0; }},
+        {"no mountains", [](GenParams& p) { p.mountain_share_pct = 0; }},
+        {"1 octave everywhere",
+         [](GenParams& p) {
+             for (NoiseSpec* n :
+                  {&p.fertility_noise, &p.moisture_noise, &p.mountain_noise, &p.outcrop_noise,
+                   &p.cave_noise, &p.river_noise, &p.lake_rough, &p.forest_noise}) {
+                 n->octaves = 1;
+                 n->warp_cells = 0;
+             }
+         }},
+    };
+    for (const Case& c : cases) {
+        GenParams p;
+        c.tweak(p);
+        double ms = 0.0;
+        for (std::uint64_t seed = 1; seed <= 3; ++seed) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const Map m = generate_map(seed, p);
+            ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                      .count();
+            CHECK(m.core.has_value());
+        }
+        MESSAGE(c.name, ": ", ms / 3, " ms");
+    }
 }

@@ -5,18 +5,36 @@
 
 namespace pixeltd {
 
-// The terrain rules (design/world.md, Terrain and Building), on the hidden grid. The ground is
-// flat (#30): rock formations are the only obstacle.
+// The terrain rules (design/world.md, Terrain and Building; #32), on the hidden grid. The ground
+// is flat:
+// - rock (mountains and outcrops) blocks walking, building, sight and direct fire;
+// - deep water blocks walking and building (not sight);
+// - shallow water, mud and marsh can be walked, not built on;
+// - a tree blocks building, not walking or sight.
 
-[[nodiscard]] inline bool is_formation(const Map& map, Cell c) noexcept {
-    return map.formation.in_bounds(c) && map.formation.at(c) != 0;
+[[nodiscard]] inline bool is_rock(const Map& map, Cell c) noexcept {
+    return map.rock.in_bounds(c) && map.rock.at(c) != 0;
 }
 
-// True if something can walk from cell a to its 4-neighbour b: both on the map, and neither part
-// of a rock formation. Symmetric.
+// True if the cell is on the map and can be walked on: not rock, not deep water.
+[[nodiscard]] inline bool is_walkable(const Map& map, Cell c) noexcept {
+    return map.rock.in_bounds(c) && map.rock.at(c) == 0 && map.ground.at(c) != Ground::Deep;
+}
+
+// True if the cell is on the map and can be built on: soil, rich soil, sand or gravel, with no
+// tree and no rock.
+[[nodiscard]] inline bool is_buildable(const Map& map, Cell c) noexcept {
+    if (!map.rock.in_bounds(c) || map.rock.at(c) != 0 || map.plant.at(c) == Plant::Tree) {
+        return false;
+    }
+    const Ground g = map.ground.at(c);
+    return g == Ground::Soil || g == Ground::RichSoil || g == Ground::Sand || g == Ground::Gravel;
+}
+
+// True if something can walk from cell a to its 4-neighbour b: both walkable. Symmetric.
 [[nodiscard]] bool can_step(const Map& map, Cell a, Cell b) noexcept;
 
-// True if every cell in `cells` can be built on: on the map, and not part of a rock formation.
+// True if every cell in `cells` is buildable.
 [[nodiscard]] bool footprint_ok(const Map& map, const Rect& cells) noexcept;
 
 // The same for a size x size block of cells with its top-left at `top_left`.

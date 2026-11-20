@@ -19,11 +19,11 @@ bool clear_shot(const Map& map, PointPx from, PointPx to, Shot shot) noexcept {
     // Does cell (cx, cy) block? Rock formations do; the shooter's and the target's own cells never
     // block.
     const auto blocks = [&](int cx, int cy) {
-        if (!map.formation.in_bounds(cx, cy) || (cx == start_x && cy == start_y) ||
+        if (!map.rock.in_bounds(cx, cy) || (cx == start_x && cy == start_y) ||
             (cx == end_x && cy == end_y)) {
             return false;
         }
-        return map.formation.at(cx, cy) != 0;
+        return map.rock.at(cx, cy) != 0;
     };
 
     // A grid walk along the segment (Amanatides & Woo), comparing the distances to the next

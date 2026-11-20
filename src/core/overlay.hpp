@@ -9,10 +9,11 @@ namespace pixeltd {
 // octaves, mesas) went with the heightmap in #30 (archive/heightmap/).
 enum class Overlay : std::uint8_t {
     Off,
-    Rough,    // formation roughness
-    Material, // material noise
+    Mountain,  // mountain noise (before the edge bias)
+    Fertility, // where things grow
+    Moisture,  // where ground is wet
 };
-inline constexpr int kOverlayCount = 3;
+inline constexpr int kOverlayCount = 4;
 
 // The next view (dir = +1) or the previous one (dir = -1), wrapping round.
 [[nodiscard]] constexpr Overlay step_overlay(Overlay o, int dir) noexcept {
@@ -20,10 +21,10 @@ inline constexpr int kOverlayCount = 3;
     return static_cast<Overlay>(i);
 }
 
-// The name shown in the HUD, e.g. "formation roughness".
+// The name shown in the HUD, e.g. "fertility".
 [[nodiscard]] const char* overlay_label(Overlay o) noexcept;
 
-// The --overlay name, e.g. "rough" ("off" for Off).
+// The --overlay name, e.g. "fertility" ("off" for Off).
 [[nodiscard]] const char* overlay_key(Overlay o) noexcept;
 
 // Parses an --overlay name. False if it isn't one.

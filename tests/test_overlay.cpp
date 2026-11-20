@@ -21,8 +21,8 @@ std::uint64_t hash_map(const Map& m) {
     };
     for (int y = 0; y < kMapH; ++y) {
         for (int x = 0; x < kMapW; ++x) {
-            mix(static_cast<std::uint64_t>(m.material.at(x, y)));
-            mix(m.formation.at(x, y));
+            mix(static_cast<std::uint64_t>(m.ground.at(x, y)));
+            mix(m.rock.at(x, y));
         }
     }
     mix(m.core ? static_cast<std::uint64_t>(m.core->x * 1000 + m.core->y) : 0u); // subcells
@@ -54,22 +54,34 @@ TEST_CASE("the layers are the noise the map was made from") {
         GenLayers L;
         const Map m = generate_map(seed, p, &L);
         REQUIRE(L.valid);
-        CHECK(L.material.width() == kMapW);
-        CHECK(L.material.height() == kMapH);
-        bool materials_ok = true;
-        bool rocks_ok = true;
+        CHECK(L.fertility.width() == kMapW);
+        CHECK(L.moisture.height() == kMapH);
+        bool range_ok = true;
+        bool ground_ok = true;
+        bool trees_ok = true;
         for (int y = 0; y < kMapH; ++y) {
             for (int x = 0; x < kMapW; ++x) {
-                materials_ok = materials_ok && static_cast<int>(m.material.at(x, y)) ==
-                                                   L.material.at(x, y) * kMaterials / 256;
-                if (m.formation.at(x, y) != 0) {
-                    // A formation's looks value comes from the roughness.
-                    rocks_ok = rocks_ok && m.formation.at(x, y) == 1 + L.rough.at(x, y) * 254 / 255;
+                for (const Grid<int>* g : {&L.fertility, &L.moisture, &L.mountain}) {
+                    range_ok = range_ok && g->at(x, y) >= 0 && g->at(x, y) <= 255;
+                }
+                const int f = L.fertility.at(x, y) * 100 / 255;
+                const Ground g = m.ground.at(x, y);
+                // Sand and rich soil come from fertility (where the ground isn't wet or gravel).
+                if (m.rock.at(x, y) == 0 && g == Ground::Sand) {
+                    ground_ok = ground_ok && f < p.sand_fertility_pct;
+                }
+                if (m.rock.at(x, y) == 0 && g == Ground::RichSoil) {
+                    ground_ok = ground_ok && f >= p.rich_fertility_pct;
+                }
+                if (m.plant.at(x, y) == Plant::Tree) {
+                    trees_ok = trees_ok && (g == Ground::Soil || g == Ground::RichSoil) &&
+                               m.rock.at(x, y) == 0;
                 }
             }
         }
-        CHECK(materials_ok);
-        CHECK(rocks_ok);
+        CHECK(range_ok);
+        CHECK(ground_ok);
+        CHECK(trees_ok);
     }
 }
 
@@ -90,9 +102,9 @@ TEST_CASE("the O key steps through every view and wraps both ways") {
         o = step_overlay(o, 1);
         CHECK(static_cast<int>(o) == i % kOverlayCount);
     }
-    CHECK(step_overlay(Overlay::Off, -1) == Overlay::Material);
-    CHECK(step_overlay(Overlay::Rough, -1) == Overlay::Off);
-    CHECK(step_overlay(Overlay::Material, 1) == Overlay::Off);
+    CHECK(step_overlay(Overlay::Off, -1) == Overlay::Moisture);
+    CHECK(step_overlay(Overlay::Mountain, -1) == Overlay::Off);
+    CHECK(step_overlay(Overlay::Moisture, 1) == Overlay::Off);
 }
 
 TEST_CASE("overlay names round-trip, and unknown names are refused") {
@@ -103,7 +115,8 @@ TEST_CASE("overlay names round-trip, and unknown names are refused") {
         CHECK(parsed == o);
         CHECK(overlay_label(o)[0] != '\0');
     }
-    Overlay parsed = Overlay::Rough;
+    Overlay parsed = Overlay::Mountain;
     CHECK_FALSE(parse_overlay("elevation", parsed)); // gone with the heightmap (#30)
-    CHECK(parsed == Overlay::Rough);
+    CHECK_FALSE(parse_overlay("rough", parsed));     // gone with the formations (#32)
+    CHECK(parsed == Overlay::Mountain);
 }

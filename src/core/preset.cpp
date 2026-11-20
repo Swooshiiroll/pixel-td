@@ -12,6 +12,7 @@ namespace {
 
 constexpr std::array<const char*, kCurves> kCurveNames = {"linear", "smoothstep", "quintic"};
 constexpr std::array<const char*, kShapes> kShapeNames = {"normal", "ridged", "billowed"};
+constexpr std::array<const char*, kBases> kBasisNames = {"value", "simplex"};
 
 // A plain int value in GenParams.
 struct IntKey {
@@ -31,9 +32,15 @@ struct NoiseIntKey {
     int NoiseSpec::* field;
 };
 
-constexpr std::array<NoiseKey, 2> kNoise = {{
-    {"formation_rough", &GenParams::formation_rough},
-    {"material_noise", &GenParams::material_noise},
+constexpr std::array<NoiseKey, 8> kNoise = {{
+    {"fertility_noise", &GenParams::fertility_noise},
+    {"moisture_noise", &GenParams::moisture_noise},
+    {"mountain_noise", &GenParams::mountain_noise},
+    {"outcrop_noise", &GenParams::outcrop_noise},
+    {"cave_noise", &GenParams::cave_noise},
+    {"river_noise", &GenParams::river_noise},
+    {"lake_rough", &GenParams::lake_rough},
+    {"forest_noise", &GenParams::forest_noise},
 }};
 
 constexpr std::array<NoiseIntKey, 6> kNoiseInts = {{
@@ -50,14 +57,41 @@ struct Entry {
     const char* section;
     IntKey key;
 };
-constexpr std::array<Entry, 13> kInts = {{
-    {"Rock formations", {"formations_min", &GenParams::formations_min}},
-    {nullptr, {"formations_max", &GenParams::formations_max}},
-    {nullptr, {"formation_radius_min", &GenParams::formation_radius_min}},
-    {nullptr, {"formation_radius_max", &GenParams::formation_radius_max}},
-    {nullptr, {"formation_scale_min_pct", &GenParams::formation_scale_min_pct}},
-    {nullptr, {"formation_scale_max_pct", &GenParams::formation_scale_max_pct}},
-    {nullptr, {"formation_share_max_pct", &GenParams::formation_share_max_pct}},
+constexpr std::array<Entry, 40> kInts = {{
+    {"Mountains", {"mountain_share_pct", &GenParams::mountain_share_pct}},
+    {nullptr, {"mountain_edge_bias", &GenParams::mountain_edge_bias}},
+    {nullptr, {"mountain_edge_reach_pct", &GenParams::mountain_edge_reach_pct}},
+    {nullptr, {"mountain_smooth_passes", &GenParams::mountain_smooth_passes}},
+    {nullptr, {"core_clear_cells", &GenParams::core_clear_cells}},
+    {nullptr, {"outcrop_share_pct", &GenParams::outcrop_share_pct}},
+    {nullptr, {"rock_min_cells", &GenParams::rock_min_cells}},
+    {"Caves", {"cave_depth_cells", &GenParams::cave_depth_cells}},
+    {nullptr, {"cave_share_pct", &GenParams::cave_share_pct}},
+    {nullptr, {"cave_min_cells", &GenParams::cave_min_cells}},
+    {"River", {"river_pct", &GenParams::river_pct}},
+    {nullptr, {"river_mountain_cost", &GenParams::river_mountain_cost}},
+    {nullptr, {"river_deep_width", &GenParams::river_deep_width}},
+    {nullptr, {"river_bank_width", &GenParams::river_bank_width}},
+    {nullptr, {"fords_min", &GenParams::fords_min}},
+    {nullptr, {"fords_max", &GenParams::fords_max}},
+    {nullptr, {"ford_length", &GenParams::ford_length}},
+    {"Lakes", {"lakes_min", &GenParams::lakes_min}},
+    {nullptr, {"lakes_max", &GenParams::lakes_max}},
+    {nullptr, {"lake_radius_min", &GenParams::lake_radius_min}},
+    {nullptr, {"lake_radius_max", &GenParams::lake_radius_max}},
+    {nullptr, {"lake_rim_cells", &GenParams::lake_rim_cells}},
+    {"Ground", {"wet_reach_cells", &GenParams::wet_reach_cells}},
+    {nullptr, {"wet_moisture_pct", &GenParams::wet_moisture_pct}},
+    {nullptr, {"marsh_moisture_pct", &GenParams::marsh_moisture_pct}},
+    {nullptr, {"gravel_reach_cells", &GenParams::gravel_reach_cells}},
+    {nullptr, {"sand_fertility_pct", &GenParams::sand_fertility_pct}},
+    {nullptr, {"rich_fertility_pct", &GenParams::rich_fertility_pct}},
+    {"Plants", {"forest_threshold_pct", &GenParams::forest_threshold_pct}},
+    {nullptr, {"forest_ramp_pct", &GenParams::forest_ramp_pct}},
+    {nullptr, {"tree_rich_pct", &GenParams::tree_rich_pct}},
+    {nullptr, {"tree_soil_pct", &GenParams::tree_soil_pct}},
+    {nullptr, {"grass_fertility_pct", &GenParams::grass_fertility_pct}},
+    {nullptr, {"bush_pct", &GenParams::bush_pct}},
     {"Core", {"core_tries", &GenParams::core_tries}},
     {"Spawns", {"spawn_edge_pct", &GenParams::spawn_edge_pct}},
     {nullptr, {"min_spawn_dist", &GenParams::min_spawn_dist}},
@@ -135,6 +169,11 @@ const char* shape_name(Shape s) noexcept {
     return i < kShapeNames.size() ? kShapeNames[i] : "normal";
 }
 
+const char* basis_name(Basis b) noexcept {
+    const auto i = static_cast<std::size_t>(b);
+    return i < kBasisNames.size() ? kBasisNames[i] : "value";
+}
+
 std::string to_preset(const GenParams& p) {
     std::string out = "# Pixel TD map generator preset: settings only (no seed).\n";
     out += "# Curves: linear | smoothstep | quintic. Shapes: normal | ridged | billowed.\n";
@@ -147,6 +186,7 @@ std::string to_preset(const GenParams& p) {
         }
         out.append(prefix).append("curve = ").append(curve_name(spec.curve)).append("\n");
         out.append(prefix).append("shape = ").append(shape_name(spec.shape)).append("\n");
+        out.append(prefix).append("basis = ").append(basis_name(spec.basis)).append("\n");
     }
     for (const Entry& e : kInts) {
         if (e.section != nullptr) {
@@ -229,6 +269,12 @@ bool from_preset(std::string_view text, GenParams& p, std::string& errors) {
                 ok = parse_name(value, kShapeNames, e);
                 if (ok) {
                     spec.shape = static_cast<Shape>(e);
+                }
+            } else if (name == "basis") {
+                known = true;
+                ok = parse_name(value, kBasisNames, e);
+                if (ok) {
+                    spec.basis = static_cast<Basis>(e);
                 }
             }
         }

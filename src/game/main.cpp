@@ -10,7 +10,8 @@
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
 //     --probe X,Y       developer tool: place a probe with its top-left at subcell X,Y (8 px
 //                       subgrid; repeatable)
-//     --overlay NAME    developer tool: start in an overlay: rough or material (issue #13)
+//     --overlay NAME    developer tool: start in an overlay: mountain, fertility or moisture (issue
+//     #13)
 //     --zoom STEP       developer tool: start at `whole` (the whole map), `half`, or the
 //                       whole-number scale N
 //     --no-fog          developer tool: start with the fog hidden (F toggles it)
@@ -136,7 +137,7 @@ bool parse_options(int argc, char** argv, Options& out) {
             out.probes.push_back(c);
         } else if (std::strcmp(argv[i], "--overlay") == 0 && has_value) {
             if (!parse_overlay(argv[++i], out.overlay)) {
-                std::fprintf(stderr, "--overlay takes rough or material\n");
+                std::fprintf(stderr, "--overlay takes mountain, fertility or moisture\n");
                 return false;
             }
         } else if (std::strcmp(argv[i], "--zoom") == 0 && has_value) {
@@ -360,7 +361,7 @@ void zoom_by(SDL_Renderer* r, Screen& s, CameraPos& cam, int delta, int px, int 
 void describe_overlay(const World& world, Overlay overlay, Cell hover, char* out, std::size_t n) {
     const GenLayers& L = world.layers;
     const Map& m = world.map;
-    if (!m.formation.in_bounds(hover)) {
+    if (!m.rock.in_bounds(hover)) {
         std::snprintf(out, n, "view: %s", overlay_label(overlay));
         return;
     }
@@ -368,7 +369,9 @@ void describe_overlay(const World& world, Overlay overlay, Cell hover, char* out
         std::snprintf(out, n, "view: %s  fallback map: no noise", overlay_label(overlay));
         return;
     }
-    const int value = overlay == Overlay::Rough ? L.rough.at(hover) : L.material.at(hover);
+    const int value = overlay == Overlay::Mountain    ? L.mountain.at(hover)
+                      : overlay == Overlay::Fertility ? L.fertility.at(hover)
+                                                      : L.moisture.at(hover);
     std::snprintf(out, n, "view: %s  value %d", overlay_label(overlay), value);
 }
 
@@ -379,11 +382,14 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
     char ground[64] = "";
     char zoom[32];
     const Map& m = world.map;
-    if (m.formation.in_bounds(hover)) {
-        static constexpr const char* kNames[kMaterials] = {"dust", "gravel", "ash", "rust"};
-        const char* what = is_formation(m, hover) ? "rock formation" : "buildable";
-        std::snprintf(ground, sizeof ground, "%s %s",
-                      kNames[static_cast<int>(m.material.at(hover))], what);
+    if (m.rock.in_bounds(hover)) {
+        static constexpr const char* kNames[kGrounds] = {
+            "soil", "rich soil", "sand", "gravel", "mud", "marsh", "shallow water", "deep water"};
+        static constexpr const char* kPlantNames[kPlants] = {"", " grass", " bush", " tree"};
+        const char* what = is_rock(m, hover) ? "rock" : is_buildable(m, hover) ? "buildable" : "";
+        std::snprintf(ground, sizeof ground, "%s%s %s",
+                      kNames[static_cast<int>(m.ground.at(hover))],
+                      kPlantNames[static_cast<int>(m.plant.at(hover))], what);
     }
     if (s.zoom.den == 1) {
         std::snprintf(zoom, sizeof zoom, "%dx", s.zoom.num);

@@ -163,20 +163,22 @@ TEST_CASE("validate: defaults are already valid; wild values are clamped") {
     CHECK(validate(p) == 0);
     CHECK(p == GenParams{});
     GenParams w;
-    w.material_noise.octaves = 99;
-    w.material_noise.step = 0;
-    w.formations_max = -3;
+    w.forest_noise.octaves = 99;
+    w.forest_noise.step = 0;
+    w.lakes_max = -3;
     w.core_area = Rect{-10, 500, 2, 2};
-    w.material_noise.curve = static_cast<Curve>(9);
+    w.forest_noise.curve = static_cast<Curve>(9);
+    w.forest_noise.basis = static_cast<Basis>(7);
     CHECK(validate(w) > 0);
-    CHECK(w.material_noise.octaves == kMaxOctaves);
-    CHECK(w.material_noise.step == 2);
-    CHECK(w.formations_max >= w.formations_min);
+    CHECK(w.forest_noise.octaves == kMaxOctaves);
+    CHECK(w.forest_noise.step == 2);
+    CHECK(w.lakes_max >= w.lakes_min);
     CHECK(w.core_area.x >= 0);
     CHECK(w.core_area.x + w.core_area.w <= kMapW);
     CHECK(w.core_area.y + w.core_area.h <= kMapH);
-    CHECK(w.material_noise.curve == Curve::Smoothstep);
-    CHECK(validate(w) == 0); // stable
+    CHECK(w.forest_noise.curve == Curve::Smoothstep);
+    CHECK(w.forest_noise.basis == Basis::Value); // NoiseSpec's default
+    CHECK(validate(w) == 0);                     // stable
 }
 
 TEST_CASE("fuzz: random valid settings never break the generator") {
@@ -186,7 +188,9 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
     for (std::uint64_t seed = 0; seed < 20; ++seed) {
         CAPTURE(seed);
         GenParams p;
-        for (NoiseSpec* n : {&p.formation_rough, &p.material_noise}) {
+        for (NoiseSpec* n :
+             {&p.fertility_noise, &p.moisture_noise, &p.mountain_noise, &p.outcrop_noise,
+              &p.cave_noise, &p.river_noise, &p.lake_rough, &p.forest_noise}) {
             n->step = pick(2, 160);
             n->octaves = pick(1, kMaxOctaves);
             n->lacunarity_pct = pick(10, 100);
@@ -194,11 +198,20 @@ TEST_CASE("fuzz: random valid settings never break the generator") {
             n->curve = static_cast<Curve>(pick(0, kCurves - 1));
             n->shape = static_cast<Shape>(pick(0, kShapes - 1));
             n->warp_cells = pick(0, 1) == 0 ? 0 : pick(1, 64);
-            n->warp_step = pick(2, 160);
+            n->basis = static_cast<Basis>(pick(0, kBases - 1));
         }
-        p.formations_min = pick(0, 300);
-        p.formations_max = pick(0, 400);
-        p.formation_share_max_pct = pick(5, 30);
+        p.mountain_share_pct = pick(0, 60);
+        p.mountain_edge_bias = pick(0, 255);
+        p.cave_share_pct = pick(0, 100);
+        p.cave_min_cells = pick(1, 200);
+        p.river_pct = pick(0, 100);
+        p.river_deep_width = pick(0, 12);
+        p.fords_min = pick(1, 6);
+        p.fords_max = pick(1, 8);
+        p.lakes_min = pick(0, 10);
+        p.lakes_max = pick(0, 20);
+        p.lake_radius_max = pick(2, 60);
+        p.tree_rich_pct = pick(0, 100);
         p.attempts = 4; // keep the sweep quick: hard settings fall back sooner
         validate(p);
         GenLayers L;

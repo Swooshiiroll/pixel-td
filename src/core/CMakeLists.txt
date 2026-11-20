@@ -8,6 +8,7 @@ add_library(pixeltd_core STATIC
   mapgen.cpp
   overlay.cpp
   preset.cpp
+  simplex.cpp
   terrain.cpp)
 target_include_directories(pixeltd_core PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_compile_features(pixeltd_core PUBLIC cxx_std_20)

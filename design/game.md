@@ -37,7 +37,8 @@ edges or inside it.
   steps to the whole map, is the one exception: those steps are drawn shrunk and smooth.
 - The map is 15360 x 8640 px: 36 1440p screens, or 576 views at the default zoom.
   The camera pans and zooms in whole-number steps, then out to the whole map ([world.md](world.md)).
-- The terrain is flat ground, coloured by its material, scattered with rock formations (#30).
+- The terrain is flat ground laid out like a colony-sim map: mountains with caves, a river and
+  lakes, soils and forests (#32).
 - A hidden grid of 16 px cells (960 x 540) sits under it, for terrain and pathfinding.
 - Towers and the core snap to an 8 px placement subgrid.
   - A light tower is 3x3 subcells (24 px).
@@ -77,9 +78,9 @@ The owner chose **arena first**: towers are designed in the game from the start.
 real map generator, so the generator comes first.
 
 1. **Map generator** ([world.md](world.md)):
-   - flat ground with materials, and rock formations;
+   - flat ground: mountains with caves, a river and lakes, ground types and plants;
    - the seeded core near the centre and 3 seeded spawns;
-   - line of sight past rock formations, and circular range;
+   - line of sight past rock, and circular range;
    - fog;
    - the camera.
 2. **Test arena + live tuning** (`test-arena.md`), together with **enemy pathfinding and mazing**

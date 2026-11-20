@@ -122,7 +122,8 @@ runs the unit tests only when the push changes a system or object (`tools/ci-sco
     itself is drawn seamless (no tiles or grid lines). Towers and the core snap to an 8 px
     placement subgrid: a light tower is 3x3 subcells (24 px), a heavy tower 6x6 (48 px), and the
     core 9x9 (72 px).
-  - **Map:** 960x540 cells (15360x8640 px), flat ground with rock formations (#30). The height
+  - **Map:** 960x540 cells (15360x8640 px), flat ground laid out like a colony-sim map: mountains with
+    caves, a river and lakes, ground types and trees (#32). The height
     code is archived in `archive/heightmap/`: not built, formatted or tested.
   - **Zoom:** whole-number steps, then halving steps and the whole map. The view fills the window at
     whole-number steps, and the default zoom shows about 640x360. See `design/world.md`.

@@ -30,6 +30,7 @@ void fit_noise(NoiseSpec& n, int& changed) {
     fit(n.persistence_pct, 0, 100, changed);
     fit_enum(n.curve, kCurves, NoiseSpec{}.curve, changed);
     fit_enum(n.shape, kShapes, NoiseSpec{}.shape, changed);
+    fit_enum(n.basis, kBases, NoiseSpec{}.basis, changed);
     fit(n.warp_cells, 0, 64, changed);
     fit(n.warp_step, 2, kMapW / 2, changed);
 }
@@ -38,15 +39,44 @@ void fit_noise(NoiseSpec& n, int& changed) {
 
 int validate(GenParams& p) noexcept {
     int changed = 0;
-    fit_noise(p.formation_rough, changed);
-    fit(p.formations_min, 0, 1024, changed);
-    fit(p.formations_max, p.formations_min, 1024, changed);
-    fit(p.formation_radius_min, 1, 64, changed);
-    fit(p.formation_radius_max, p.formation_radius_min, 64, changed);
-    fit(p.formation_scale_min_pct, 0, 400, changed);
-    fit(p.formation_scale_max_pct, p.formation_scale_min_pct, 400, changed);
-    fit(p.formation_share_max_pct, 0, 100, changed);
-    fit_noise(p.material_noise, changed);
+    for (NoiseSpec* n : {&p.fertility_noise, &p.moisture_noise, &p.mountain_noise, &p.outcrop_noise,
+                         &p.cave_noise, &p.river_noise, &p.lake_rough, &p.forest_noise}) {
+        fit_noise(*n, changed);
+    }
+    fit(p.mountain_share_pct, 0, 70, changed);
+    fit(p.mountain_edge_bias, 0, 255, changed);
+    fit(p.mountain_edge_reach_pct, 1, 100, changed);
+    fit(p.mountain_smooth_passes, 0, 8, changed);
+    fit(p.core_clear_cells, 0, 120, changed);
+    fit(p.outcrop_share_pct, 0, 20, changed);
+    fit(p.rock_min_cells, 1, 10000, changed);
+    fit(p.cave_depth_cells, 1, 40, changed);
+    fit(p.cave_share_pct, 0, 100, changed);
+    fit(p.cave_min_cells, 1, 10000, changed);
+    fit(p.river_pct, 0, 100, changed);
+    fit(p.river_mountain_cost, 0, 1000, changed);
+    fit(p.river_deep_width, 0, 40, changed);
+    fit(p.river_bank_width, 1, 20, changed);
+    fit(p.fords_min, 1, 12, changed);
+    fit(p.fords_max, p.fords_min, 12, changed);
+    fit(p.ford_length, 1, 60, changed);
+    fit(p.lakes_min, 0, 64, changed);
+    fit(p.lakes_max, p.lakes_min, 64, changed);
+    fit(p.lake_radius_min, 2, 80, changed);
+    fit(p.lake_radius_max, p.lake_radius_min, 80, changed);
+    fit(p.lake_rim_cells, 1, 20, changed);
+    fit(p.wet_reach_cells, 0, 40, changed);
+    fit(p.wet_moisture_pct, 0, 100, changed);
+    fit(p.marsh_moisture_pct, 0, 100, changed);
+    fit(p.gravel_reach_cells, 0, 20, changed);
+    fit(p.sand_fertility_pct, 0, 100, changed);
+    fit(p.rich_fertility_pct, p.sand_fertility_pct, 100, changed);
+    fit(p.forest_threshold_pct, 0, 100, changed);
+    fit(p.forest_ramp_pct, 1, 100, changed);
+    fit(p.tree_rich_pct, 0, 100, changed);
+    fit(p.tree_soil_pct, 0, 100, changed);
+    fit(p.grass_fertility_pct, 0, 100, changed);
+    fit(p.bush_pct, 0, 100, changed);
     // The core area: inside the map and big enough for the core's 5 x 5 cells.
     constexpr int kCoreCells = 5;
     fit(p.core_area.x, 0, kMapW - kCoreCells, changed);

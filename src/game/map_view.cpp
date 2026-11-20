@@ -14,17 +14,22 @@ namespace {
 
 using Rgbf = std::array<float, 3>;
 
-// Placeholder palette (a dusty planet surface) until the style board picks the art direction.
-// The flat ground (#30) is coloured by its material; rock formations are shaded by how tall they
-// stand and cast a shadow to the south-east.
-constexpr std::array<Rgbf, kMaterials> kMaterialColour = {{
-    {196.0f, 152.0f, 108.0f}, // dust
-    {160.0f, 150.0f, 138.0f}, // gravel
-    {128.0f, 122.0f, 130.0f}, // ash
-    {190.0f, 116.0f, 82.0f},  // rust
+// Placeholder palette (temperate, #32) until the style board picks the art direction. Each ground
+// type has a colour; trees darken their cell (so forests read zoomed out), rock is shaded by how
+// tall it stands and casts a shadow to the south-east.
+constexpr std::array<Rgbf, kGrounds> kGroundColour = {{
+    {118.0f, 128.0f, 70.0f},  // soil (grassy)
+    {92.0f, 118.0f, 58.0f},   // rich soil
+    {200.0f, 182.0f, 128.0f}, // sand
+    {140.0f, 136.0f, 126.0f}, // gravel
+    {104.0f, 88.0f, 62.0f},   // mud
+    {86.0f, 104.0f, 76.0f},   // marsh
+    {86.0f, 140.0f, 160.0f},  // shallow water
+    {44.0f, 82.0f, 128.0f},   // deep water
 }};
-constexpr Rgbf kFormationColour{132.0f, 124.0f, 142.0f};
-constexpr Rgbf kNeutral{176.0f, 158.0f, 140.0f}; // materials are muted a little towards this
+constexpr Rgbf kRockColour{128.0f, 124.0f, 120.0f};
+constexpr Rgbf kTreeColour{46.0f, 82.0f, 40.0f};
+constexpr Rgbf kBareSoil{132.0f, 112.0f, 82.0f}; // soil without grass
 
 // The fog layer: unexplored cells are pulled this far towards this colour.
 constexpr std::uint8_t kHazeR = 58;
@@ -118,7 +123,9 @@ bool MapView::upload_terrain() {
 void MapView::fill_cells(const Map& map, const GenLayers& layers) {
     if (overlay_ != Overlay::Off) {
         // A noise layer: greyscale, stretched over the layer's own lowest to highest value.
-        const Grid<int>* field = overlay_ == Overlay::Rough ? &layers.rough : &layers.material;
+        const Grid<int>* field = overlay_ == Overlay::Mountain    ? &layers.mountain
+                                 : overlay_ == Overlay::Fertility ? &layers.fertility
+                                                                  : &layers.moisture;
         const auto [lo_it, hi_it] =
             std::minmax_element(field->cells().begin(), field->cells().end());
         const int lo = *lo_it;
@@ -134,11 +141,11 @@ void MapView::fill_cells(const Map& map, const GenLayers& layers) {
         return;
     }
 
-    // The terrain. The flat ground's colour is its material hue, softened over its neighbours and
-    // muted a little. Rock formations are shaded by how tall they stand (their 1..255 value) and
-    // lit from the north-west, and cast a shadow to the south-east.
+    // The terrain. The ground's colour (soil shows bare where nothing grows), softened over its
+    // neighbours, darkened under trees. Rock is shaded by how tall it stands (its 1..255 value),
+    // lit from the north-west, and casts a shadow to the south-east.
     const auto rock = [&](int x, int y) {
-        return map.formation.in_bounds(x, y) ? static_cast<float>(map.formation.at(x, y)) : 0.0f;
+        return map.rock.in_bounds(x, y) ? static_cast<float>(map.rock.at(x, y)) : 0.0f;
     };
     const auto rock_at = [&](int x, int y) { return rock(x, y) > 0.0f; };
     for (int y = 0; y < kMapH; ++y) {
@@ -146,29 +153,43 @@ void MapView::fill_cells(const Map& map, const GenLayers& layers) {
             Rgbf base{0.0f, 0.0f, 0.0f};
             float k = 0.86f;
             if (rock_at(x, y)) {
-                base = kFormationColour;
+                base = kRockColour;
                 const float gx = rock(x + 1, y) - rock(x - 1, y);
                 const float gy = rock(x, y + 1) - rock(x, y - 1);
                 k = (1.0f + 0.4f * rock(x, y) / 255.0f) *
                     std::clamp(1.0f - (gx + gy) * 0.004f, 0.55f, 1.4f);
             } else {
-                for (int dy = -2; dy <= 2; ++dy) {
-                    for (int dx = -2; dx <= 2; ++dx) {
-                        const Rgbf& m = kMaterialColour[static_cast<std::size_t>(map.material.at(
-                            std::clamp(x + dx, 0, kMapW - 1), std::clamp(y + dy, 0, kMapH - 1)))];
-                        for (std::size_t ch = 0; ch < 3; ++ch) {
-                            base[ch] += m[ch] / 25.0f;
-                        }
+                // A light blend with the 4 neighbours softens the edges between ground types.
+                const auto colour_at = [&](int cx, int cy) -> Rgbf {
+                    const int qx = std::clamp(cx, 0, kMapW - 1);
+                    const int qy = std::clamp(cy, 0, kMapH - 1);
+                    const Ground g = map.ground.at(qx, qy);
+                    if ((g == Ground::Soil || g == Ground::RichSoil) &&
+                        map.plant.at(qx, qy) == Plant::None) {
+                        return kBareSoil;
+                    }
+                    return kGroundColour[static_cast<std::size_t>(g)];
+                };
+                const Rgbf c0 = colour_at(x, y);
+                for (std::size_t ch = 0; ch < 3; ++ch) {
+                    base[ch] = c0[ch] * 0.6f;
+                }
+                for (const auto& [dx, dy] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+                    const Rgbf cn = colour_at(x + dx, y + dy);
+                    for (std::size_t ch = 0; ch < 3; ++ch) {
+                        base[ch] += cn[ch] * 0.1f;
                     }
                 }
-                for (std::size_t ch = 0; ch < 3; ++ch) {
-                    base[ch] = base[ch] * 0.8f + kNeutral[ch] * 0.2f;
+                if (map.plant.at(x, y) == Plant::Tree) {
+                    for (std::size_t ch = 0; ch < 3; ++ch) {
+                        base[ch] = base[ch] * 0.35f + kTreeColour[ch] * 0.65f;
+                    }
                 }
             }
             if (!rock_at(x, y)) {
                 for (int d = 1; d <= 4; ++d) {
                     if (rock_at(x - d, y - d)) {
-                        k *= 0.62f; // in the shadow of a formation
+                        k *= 0.62f; // in the shadow of rock
                         break;
                     }
                 }
@@ -283,7 +304,7 @@ void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_l
     const long long reach2 = static_cast<long long>(reach) * reach;
     for (int cy = (centre.y - reach) / kCellPx; cy <= (centre.y + reach) / kCellPx; ++cy) {
         for (int cx = (centre.x - reach) / kCellPx; cx <= (centre.x + reach) / kCellPx; ++cx) {
-            if (!map.formation.in_bounds(cx, cy)) {
+            if (!map.rock.in_bounds(cx, cy)) {
                 continue;
             }
             const PointPx c = centre_of(Cell{cx, cy});

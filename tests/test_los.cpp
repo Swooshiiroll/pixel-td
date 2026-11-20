@@ -28,29 +28,38 @@ TEST_CASE("open ground never blocks") {
 
 TEST_CASE("rock formations block sight and direct fire; lobbed shots arc over them") {
     Range r;
-    r.map.formation.at(15, 10) = 200;
+    r.map.rock.at(15, 10) = 200;
     CHECK_FALSE(clear_shot(r.map, r.from, r.to, Shot::Direct));
     CHECK_FALSE(can_see(r.map, r.from, r.to));
     CHECK(clear_shot(r.map, r.from, r.to, Shot::Lobbed));
     // However short the rock (its value is looks only).
-    r.map.formation.at(15, 10) = 1;
+    r.map.rock.at(15, 10) = 1;
     CHECK_FALSE(can_see(r.map, r.from, r.to));
 }
 
-TEST_CASE("a formation beside the line doesn't block") {
+TEST_CASE("water and trees don't block sight") {
     Range r;
-    r.map.formation.at(15, 11) = 1;
-    r.map.formation.at(15, 9) = 1;
+    for (int x = 12; x < 18; ++x) {
+        r.map.ground.at(x, 10) = Ground::Deep;
+    }
+    r.map.plant.at(18, 10) = Plant::Tree;
+    CHECK(can_see(r.map, r.from, r.to));
+}
+
+TEST_CASE("a rock beside the line doesn't block") {
+    Range r;
+    r.map.rock.at(15, 11) = 1;
+    r.map.rock.at(15, 9) = 1;
     CHECK(clear_shot(r.map, r.from, r.to, Shot::Direct));
 }
 
 TEST_CASE("vertical and backwards lines") {
     Range r;
     const PointPx below = centre_of(Cell{10, 20});
-    r.map.formation.at(10, 15) = 1;
+    r.map.rock.at(10, 15) = 1;
     CHECK_FALSE(can_see(r.map, r.from, below));
     CHECK_FALSE(can_see(r.map, below, r.from));
-    r.map.formation.at(15, 10) = 1;
+    r.map.rock.at(15, 10) = 1;
     CHECK_FALSE(can_see(r.map, r.to, r.from));
 }
 
@@ -58,20 +67,20 @@ TEST_CASE("a line exactly through a cell corner counts both cells beside it") {
     Range r;
     const PointPx diag = centre_of(Cell{12, 12});
     CHECK(can_see(r.map, r.from, diag));
-    r.map.formation.at(11, 10) = 1;
+    r.map.rock.at(11, 10) = 1;
     CHECK_FALSE(can_see(r.map, r.from, diag));
-    r.map.formation.at(11, 10) = 0;
-    r.map.formation.at(10, 11) = 1;
+    r.map.rock.at(11, 10) = 0;
+    r.map.rock.at(10, 11) = 1;
     CHECK_FALSE(can_see(r.map, r.from, diag));
-    r.map.formation.at(10, 11) = 0;
-    r.map.formation.at(12, 10) = 1; // not beside the line
+    r.map.rock.at(10, 11) = 0;
+    r.map.rock.at(12, 10) = 1; // not beside the line
     CHECK(can_see(r.map, r.from, diag));
 }
 
 TEST_CASE("the shooter's and the target's own cells never block") {
     Range r;
-    r.map.formation.at(20, 10) = 1; // the target stands against a rock, in its cell
-    r.map.formation.at(10, 10) = 1;
+    r.map.rock.at(20, 10) = 1; // the target stands against a rock, in its cell
+    r.map.rock.at(10, 10) = 1;
     CHECK(can_see(r.map, r.from, r.to));
     // A light tower's centre is the middle of its 3x3 subcells.
     const PointPx tower = centre_of(SubCell{20, 20}, kLightSub);
