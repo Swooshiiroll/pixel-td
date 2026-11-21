@@ -22,6 +22,13 @@
 //     --send            developer tool: send a walker from every spawn at start (E)
 //     --stream          developer tool: start with the walker stream on (Shift+E)
 //     --routes          developer tool: start with the route lines shown (R)
+//     --tower X,Y       developer tool: place a light test tower at subcell X,Y (repeatable;
+//                       --heavy-tower X,Y for a heavy one) (#11 phase 2)
+//     --layout FILE     developer tool: start in a saved arena layout (map, blocks, towers)
+//     --wave N          developer tool: send a wave of N walkers per spawn at start
+//     --speed X         developer tool: start at sim speed X (0.25, 0.5, 1, 2, 4 or 8)
+//     --pause-at T      developer tool: pause when the sim reaches tick T
+//     --select X,Y      developer tool: select the test tower covering subcell X,Y
 //     --window WxH     developer tool: open the window at W x H (screenshots)
 //     --preset FILE     developer tool: generate with the settings in a preset file (#21)
 //     --panel           developer tool: open the map-tuning panel at start (Tab toggles it)
@@ -37,12 +44,16 @@
 // and shows the fog, F5 makes a new random map, Tab opens the map-tuning panel; Esc quits.
 // Pathfinding (#11): B cycles build mode (off, light block, heavy block; left-click places,
 // right-click removes), E sends a walker from every spawn, Shift+E toggles the stream, R shows
-// the routes; hovering a walker shows its stats.
+// the routes; hovering a walker shows its stats. The test arena (#11 phase 2): T cycles test
+// tower building (off, light, heavy), a left-click on a tower selects it, G cycles the hovered
+// tower's targeting, Space pauses, . steps a tick (Shift+. ten), [ and ] change the speed; the
+// tuning file (tuning.txt next to the exe) is reloaded when it changes.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -57,12 +68,14 @@
 #include "core/gen_params.hpp"
 #include "core/grid.hpp"
 #include "core/hash.hpp"
+#include "core/layout.hpp"
 #include "core/los.hpp"
 #include "core/map.hpp"
 #include "core/mapgen.hpp"
 #include "core/overlay.hpp"
 #include "core/sim.hpp"
 #include "core/sim_params.hpp"
+#include "core/sim_tuning.hpp"
 #include "core/terrain.hpp"
 #include "game/map_view.hpp"
 #include "game/tuning_panel.hpp"
@@ -85,6 +98,11 @@ constexpr int kPanPerTick = 18;  // window pixels per tick, the same speed at ev
 constexpr float kEdgePan = 8.0f; // window points from the edge that start edge panning
 constexpr SDL_Color kProbeColour{250, 220, 120, 200};
 constexpr Uint64 kRegenThrottleNs = 120'000'000; // tuning panel: regenerate at most this often
+constexpr Uint64 kTuningCheckNs = 500'000'000;   // the tuning file is checked this often
+// The arena's sim speeds (#11 phase 2), as fractions of real time: [ and ] step through them.
+constexpr std::array<Zoom, 6> kSpeeds = {{{1, 4}, {1, 2}, {1, 1}, {2, 1}, {4, 1}, {8, 1}}};
+constexpr int kNormalSpeed = 2;
+constexpr int kMaxSimTicksPerFrame = 64; // the sim's catch-up cap (8x speed needs 8 a frame)
 
 // The --zoom option.
 enum class StartZoom : std::uint8_t { Standard, Whole, Half, Scale };
@@ -107,6 +125,15 @@ struct Options {
     bool send = false;
     bool stream = false;
     bool routes = false;
+    // The test arena (#11 phase 2).
+    std::vector<SubCell> light_towers;
+    std::vector<SubCell> heavy_towers;
+    const char* layout = nullptr;
+    int wave = 0;
+    int speed = 2; // an index into kSpeeds: 1x
+    long pause_at = -1;
+    bool has_select = false;
+    SubCell select{};
     bool no_fog = false;
     const char* preset = nullptr;
     bool panel = false;
@@ -171,6 +198,40 @@ bool parse_options(int argc, char** argv, Options& out) {
             out.stream = true;
         } else if (std::strcmp(argv[i], "--routes") == 0) {
             out.routes = true;
+        } else if ((std::strcmp(argv[i], "--tower") == 0 ||
+                    std::strcmp(argv[i], "--heavy-tower") == 0) &&
+                   has_value) {
+            const bool heavy = argv[i][2] == 'h';
+            SubCell c;
+            if (!parse_pair(argv[++i], ',', c.x, c.y)) {
+                std::fprintf(stderr, "--tower and --heavy-tower take a subcell as X,Y\n");
+                return false;
+            }
+            (heavy ? out.heavy_towers : out.light_towers).push_back(c);
+        } else if (std::strcmp(argv[i], "--layout") == 0 && has_value) {
+            out.layout = argv[++i];
+        } else if (std::strcmp(argv[i], "--wave") == 0 && has_value) {
+            out.wave = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--speed") == 0 && has_value) {
+            const double x = std::strtod(argv[++i], nullptr);
+            out.speed = -1;
+            for (std::size_t s = 0; s < kSpeeds.size(); ++s) {
+                if (std::abs(x - static_cast<double>(kSpeeds[s].num) / kSpeeds[s].den) < 1e-6) {
+                    out.speed = static_cast<int>(s);
+                }
+            }
+            if (out.speed < 0) {
+                std::fprintf(stderr, "--speed takes 0.25, 0.5, 1, 2, 4 or 8\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--pause-at") == 0 && has_value) {
+            out.pause_at = std::strtol(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--select") == 0 && has_value) {
+            if (!parse_pair(argv[++i], ',', out.select.x, out.select.y)) {
+                std::fprintf(stderr, "--select takes a subcell as X,Y\n");
+                return false;
+            }
+            out.has_select = true;
         } else if (std::strcmp(argv[i], "--overlay") == 0 && has_value) {
             if (!parse_overlay(argv[++i], out.overlay)) {
                 std::fprintf(stderr, "--overlay takes mountain, fertility or moisture\n");
@@ -220,7 +281,9 @@ bool parse_options(int argc, char** argv, Options& out) {
                 stderr,
                 "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
                 "[--zoom whole|half|N] [--look X,Y] [--no-fog] [--block X,Y]... "
-                "[--heavy X,Y]... [--send] [--stream] [--routes] [--window WxH] [--preset FILE] "
+                "[--heavy X,Y]... [--send] [--stream] [--routes] [--tower X,Y]... "
+                "[--heavy-tower X,Y]... [--layout FILE] [--wave N] [--speed X] [--pause-at T] "
+                "[--select X,Y] [--window WxH] [--preset FILE] "
                 "[--panel] [--map-shot file.bmp] [--map-scale 2|4|8] [--frames N] "
                 "[--screenshot file.bmp]\n");
             return false;
@@ -246,10 +309,15 @@ struct World {
     // with every new map; its numbers carry over.
     Sim sim;
     SimParams sim_params;
-    double route_ms = 0.0; // how long the last route rebuild took
+    double tick_ms = 0.0; // the sim's average tick time (a running average)
 
     [[nodiscard]] int probe_range_px() const noexcept { return params.light_range_px; }
 };
+
+// The sim's clock for its route-build timing readout (diagnostics only; the sim never reads it).
+std::int64_t now_ns() {
+    return static_cast<std::int64_t>(SDL_GetTicksNS());
+}
 
 // True if two square subcell footprints overlap.
 bool overlap(SubCell a, int a_size, SubCell b, int b_size) {
@@ -316,18 +384,16 @@ bool new_map(World& world, MapView& view, std::uint64_t seed) {
     return ok;
 }
 
-// Brings the sim's routes up to date, timing the rebuild (it's the one costly step, #11).
-void update_routes(World& world) {
-    if (!world.sim.routes_dirty()) {
-        return;
-    }
-    const Uint64 start = SDL_GetTicksNS();
-    world.sim.update_routes();
-    world.route_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
-}
+// Build mode (#11): off, or placing light or heavy blocks, or light or heavy test towers.
+enum class BuildMode : std::uint8_t { Off, Light, Heavy, LightTower, HeavyTower };
 
-// Build mode (#11): off, or placing light or heavy blocks.
-enum class BuildMode : std::uint8_t { Off, Light, Heavy };
+[[nodiscard]] BlockKind build_kind(BuildMode m) noexcept {
+    return m == BuildMode::Heavy || m == BuildMode::HeavyTower ? BlockKind::Heavy
+                                                               : BlockKind::Light;
+}
+[[nodiscard]] bool build_armed(BuildMode m) noexcept {
+    return m == BuildMode::LightTower || m == BuildMode::HeavyTower;
+}
 
 // The block a build-mode click places: its top-left subcell, so the cursor sits on its centre.
 SubCell block_under(int wx, int wy, BlockKind kind) {
@@ -348,13 +414,129 @@ const char* block_refusal(const World& world, SubCell top_left, BlockKind kind) 
     return p == Place::Ok ? nullptr : place_name(p);
 }
 
-// Places a block; the reason when it can't go there, or nullptr.
-const char* place_block(World& world, SubCell top_left, BlockKind kind) {
+// Places a block or a test tower; the reason when it can't go there, or nullptr. A tower lifts
+// the fog it can see, like a probe.
+const char* place_piece(World& world, MapView& view, SubCell top_left, BlockKind kind, bool armed) {
     const char* why = block_refusal(world, top_left, kind);
-    if (why == nullptr) {
-        (void)world.sim.place_block(top_left, kind);
+    if (why != nullptr) {
+        return why;
     }
-    return why;
+    if (!armed) {
+        (void)world.sim.place_block(top_left, kind);
+        return nullptr;
+    }
+    (void)world.sim.place_tower(top_left, kind);
+    const Rect lifted = world.fog.explore_from(world.map, centre_of(top_left, block_size_sub(kind)),
+                                               world.sim.tower_params(kind).range_px);
+    view.update_fog(world.fog, lifted);
+    return nullptr;
+}
+
+// The armed block (test tower) covering subcell s, or -1.
+int tower_at(const World& world, SubCell s) {
+    const int slot = world.sim.block_at(s);
+    return slot >= 0 && world.sim.blocks()[static_cast<std::size_t>(slot)].armed ? slot : -1;
+}
+
+// The live-tuning file (#11 phase 2): every SimParams value, next to the exe.
+struct TuningFile {
+    std::string path;
+    SDL_Time modified = 0;
+    Uint64 last_check = 0;
+};
+
+// Reads the tuning file over the defaults (so the file is the whole truth) and applies it.
+void load_tuning(World& world, TuningFile& tf, std::string& message) {
+    std::size_t size = 0;
+    void* data = SDL_LoadFile(tf.path.c_str(), &size);
+    if (data == nullptr) {
+        message = std::string("can't read the tuning file: ") + SDL_GetError();
+        return;
+    }
+    const std::string text(static_cast<const char*>(data), size);
+    SDL_free(data);
+    SimParams p;
+    std::string errors;
+    const bool ok = from_tuning(text, p, errors);
+    world.sim_params = p;
+    world.sim.set_params(p);
+    message = ok ? "tuning file loaded" : "tuning file loaded with problems:\n" + errors;
+    SDL_Log("%s", message.c_str());
+}
+
+bool save_tuning(const World& world, TuningFile& tf, std::string& message) {
+    const std::string text = to_tuning(world.sim_params);
+    const bool ok = SDL_SaveFile(tf.path.c_str(), text.data(), text.size());
+    message = ok ? "saved the tuning file" : std::string("save failed: ") + SDL_GetError();
+    SDL_PathInfo info;
+    if (ok && SDL_GetPathInfo(tf.path.c_str(), &info)) {
+        tf.modified = info.modify_time; // our own write isn't a change to reload
+    }
+    return ok;
+}
+
+// Reloads the tuning file when it has changed on disk (checked every 500 ms).
+void watch_tuning(World& world, TuningFile& tf, std::string& message) {
+    const Uint64 now = SDL_GetTicksNS();
+    if (now - tf.last_check < kTuningCheckNs) {
+        return;
+    }
+    tf.last_check = now;
+    SDL_PathInfo info;
+    if (SDL_GetPathInfo(tf.path.c_str(), &info) && info.modify_time != tf.modified) {
+        tf.modified = info.modify_time;
+        load_tuning(world, tf, message);
+    }
+}
+
+// Saves the current map, blocks and towers as a layout.
+bool save_layout(const World& world, const std::string& path, std::string& message) {
+    Layout l;
+    l.seed = world.map.seed;
+    l.gen = world.params;
+    l.pieces = pieces_of(world.sim);
+    const std::string text = to_layout(l);
+    const bool ok = SDL_SaveFile(path.c_str(), text.data(), text.size());
+    message = ok ? "saved " + path : std::string("save failed: ") + SDL_GetError();
+    return ok;
+}
+
+// Loads a layout: its map, then its pieces (each tower lifting its fog). False if the map
+// couldn't be made.
+bool load_layout(World& world, MapView& view, const std::string& path, std::string& message) {
+    std::size_t size = 0;
+    void* data = SDL_LoadFile(path.c_str(), &size);
+    if (data == nullptr) {
+        message = "can't read " + path + ": " + SDL_GetError();
+        return true;
+    }
+    const std::string text(static_cast<const char*>(data), size);
+    SDL_free(data);
+    Layout l;
+    std::string errors;
+    const bool clean = from_layout(text, l, errors);
+    world.params = l.gen;
+    if (!new_map(world, view, l.seed)) {
+        return false;
+    }
+    int refused = 0;
+    for (const Piece& p : l.pieces) {
+        if (place_piece(world, view, p.top_left, p.kind, p.armed) != nullptr) {
+            ++refused;
+        } else if (p.armed) {
+            world.sim.set_targeting(world.sim.block_at(p.top_left), p.targeting);
+        }
+    }
+    world.sim.update_routes();
+    message = "loaded " + path;
+    if (refused > 0) {
+        message += " (" + std::to_string(refused) + " pieces no longer fit)";
+    }
+    if (!clean) {
+        message += "\nproblems:\n" + errors;
+    }
+    SDL_Log("%s", message.c_str());
+    return true;
 }
 
 bool save_target(SDL_Renderer* r, const char* path) {
@@ -485,9 +667,16 @@ void describe_overlay(const World& world, Overlay overlay, Cell hover, char* out
 }
 
 // The HUD, drawn into the current target `width` pixels wide (in HUD pixels).
+// What the HUD shows of the arena's time and the hovered test tower (#11 phase 2).
+struct HudArena {
+    int speed = kNormalSpeed;
+    bool paused = false;
+    int hover_tower = -1;
+};
+
 void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width, Cell hover,
               bool probe_mode, Overlay overlay, bool fog_shown, BuildMode build,
-              const char* refusal, int hover_walker) {
+              const char* refusal, int hover_walker, const HudArena& arena) {
     char line[224];
     char ground[64] = "";
     char zoom[32];
@@ -522,37 +711,83 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
                   static_cast<unsigned long long>(m.seed), zoom, area, world.gen_ms, hover.x,
                   hover.y, ground, fog_shown ? "" : "  [fog off]",
                   probe_mode ? "  [PROBE: click to place]" : "");
-    // The sim (#11): the core, the walkers, the stream, the last route rebuild and build mode.
+    // The sim (#11): the core, the walkers, the stream, the time and build mode.
     const Sim& sim = world.sim;
     char sim_line[224];
     const char* mode =
-        build == BuildMode::Light   ? "  [BUILD light: click places, right-click removes]"
-        : build == BuildMode::Heavy ? "  [BUILD heavy: click places, right-click removes]"
-                                    : "";
+        build == BuildMode::Light   ? "  [BUILD light block: click places, right-click removes]"
+        : build == BuildMode::Heavy ? "  [BUILD heavy block: click places, right-click removes]"
+        : build == BuildMode::LightTower
+            ? "  [BUILD light tower: click places, right-click removes]"
+        : build == BuildMode::HeavyTower
+            ? "  [BUILD heavy tower: click places, right-click removes]"
+            : "";
     char core[48];
     if (sim.core_fallen()) {
         std::snprintf(core, sizeof core, "CORE FALLEN");
     } else {
         std::snprintf(core, sizeof core, "core %d/%d", sim.core_health(), sim.params().core_health);
     }
-    std::snprintf(sim_line, sizeof sim_line, "%s  walkers %zu  stream %s  routes %.0fms%s%s%s",
-                  core, sim.walkers().size(), sim.stream() ? "on" : "off", world.route_ms, mode,
-                  refusal != nullptr ? "  can't: " : "", refusal != nullptr ? refusal : "");
-    // A hovered walker's stats.
+    char time[32];
+    const Zoom sp = kSpeeds[static_cast<std::size_t>(arena.speed)];
+    if (arena.paused) {
+        std::snprintf(time, sizeof time, "PAUSED");
+    } else if (sp.den == 1) {
+        std::snprintf(time, sizeof time, "x%d", sp.num);
+    } else {
+        std::snprintf(time, sizeof time, "x1/%d", sp.den);
+    }
+    std::snprintf(sim_line, sizeof sim_line, "%s  %s  tick %lld  walkers %zu  stream %s%s%s%s",
+                  core, time, static_cast<long long>(sim.ticks()), sim.walkers().size(),
+                  sim.stream() ? "on" : "off", mode, refusal != nullptr ? "  can't: " : "",
+                  refusal != nullptr ? refusal : "");
+    // The latest wave, and how the sim is keeping up.
+    char arena_line[224];
+    char wave[96] = "no waves yet";
+    if (!sim.waves().empty()) {
+        const WaveStats& ws = sim.waves().back();
+        const std::int64_t end = ws.done() ? ws.end_tick : sim.ticks();
+        std::snprintf(
+            wave, sizeof wave, "wave #%u %d/%d sent, %d killed, %d leaked, core -%d, %.1fs%s",
+            ws.id, ws.sent, ws.planned, ws.killed, ws.leaked, ws.core_damage,
+            static_cast<double>(end - ws.start_tick) / kTicksPerSecond, ws.done() ? "" : "...");
+    }
+    int towers = 0;
+    for (const Block& b : sim.blocks()) {
+        towers += b.alive && b.armed ? 1 : 0;
+    }
+    std::snprintf(arena_line, sizeof arena_line,
+                  "%s  |  tick %.3fms  route %.0fms%s  waits %d  shots %d  towers %d", wave,
+                  world.tick_ms, static_cast<double>(sim.last_build_ns()) / 1e6,
+                  sim.routes_pending() ? " (pending)" : "", sim.route_waits(),
+                  sim.projectiles_in_flight(), towers);
+    // A hovered walker's stats, or a hovered tower's.
     char walker_line[160] = "";
     if (hover_walker >= 0) {
         const Walker& w = sim.walkers()[static_cast<std::size_t>(hover_walker)];
-        const char* state = w.state == WalkerState::Breaking ? "breaking a block"
-                            : w.state == WalkerState::Stuck  ? "stuck"
-                                                             : "walking";
+        const char* state = w.state == WalkerState::Breaking  ? "breaking a block"
+                            : w.state == WalkerState::Stuck   ? "stuck"
+                            : w.state == WalkerState::Waiting ? "waiting for new routes"
+                                                              : "walking";
         std::snprintf(walker_line, sizeof walker_line,
-                      "walker #%u  speed %d px/s (%d%%)  health %d/%d  %s%s", w.id,
-                      sim.params().walker_speed_px_s * w.speed_pct / 100, w.speed_pct, w.health,
-                      sim.params().walker_health, state, w.sealed ? " (sealed in)" : "");
+                      "walker #%u (wave %u)  speed %d px/s (%d%%)  health %d/%d  %s%s", w.id,
+                      w.wave,
+                      sim.params().walker_speed_px_s * w.speed_scale_pct / 100 * w.speed_pct / 100,
+                      w.speed_pct, w.health, w.max_health, state, w.sealed ? " (sealed in)" : "");
+    } else if (arena.hover_tower >= 0) {
+        const Block& b = sim.blocks()[static_cast<std::size_t>(arena.hover_tower)];
+        const TowerParams& tp = sim.tower_params(b.kind);
+        std::snprintf(walker_line, sizeof walker_line,
+                      "%s tower  range %d  dmg/shot %d every %dms  health %d/%d  dps %d  dmg %lld  "
+                      "kills %d  %s (G)",
+                      b.kind == BlockKind::Light ? "light" : "heavy", tp.range_px, tp.damage,
+                      tp.fire_interval_ms, b.health(), b.max_health,
+                      sim.tower_dps(arena.hover_tower), static_cast<long long>(b.gun.damage),
+                      b.gun.kills, targeting_name(b.gun.targeting));
     }
 
     const bool overlay_line = overlay != Overlay::Off;
-    const int lines = 2 + (overlay_line ? 1 : 0) + (walker_line[0] != '\0' ? 1 : 0);
+    const int lines = 3 + (overlay_line ? 1 : 0) + (walker_line[0] != '\0' ? 1 : 0);
     const SDL_FRect strip{0.0f, 0.0f, width, 10.0f * static_cast<float>(lines)};
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
@@ -573,6 +808,9 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
         SDL_SetRenderDrawColor(r, 200, 210, 255, 255);
     }
     SDL_RenderDebugText(r, 2.0f, y, sim_line);
+    y += 10.0f;
+    SDL_SetRenderDrawColor(r, 170, 255, 235, 255);
+    SDL_RenderDebugText(r, 2.0f, y, arena_line);
     y += 10.0f;
     if (walker_line[0] != '\0') {
         SDL_SetRenderDrawColor(r, 230, 200, 255, 255);
@@ -690,11 +928,31 @@ int main(int argc, char** argv) {
     {
         World world;
         world.params = start_params;
+        world.sim.set_clock(&now_ns);
         MapView view(renderer);
         Screen screen;
-        const char* base = SDL_GetBasePath();
-        game::TuningPanel panel(std::string(base != nullptr ? base : "") + "presets/");
+        const char* base_path = SDL_GetBasePath();
+        const std::string base = base_path != nullptr ? base_path : "";
+        const std::string layouts_dir = base + "layouts/";
+        game::TuningPanel panel(base + "presets/", layouts_dir);
         panel.set_open(opts.panel);
+        // The live-tuning file (#11 phase 2): loaded if it's there, written with the defaults if
+        // not, then watched.
+        game::ArenaUi arena;
+        TuningFile tuning;
+        tuning.path = base + "tuning.txt";
+        arena.tuning_path = tuning.path;
+        {
+            SDL_PathInfo info;
+            if (SDL_GetPathInfo(tuning.path.c_str(), &info)) {
+                tuning.modified = info.modify_time;
+                load_tuning(world, tuning, arena.tuning_message);
+            } else {
+                (void)save_tuning(world, tuning, arena.tuning_message);
+                arena.tuning_message = "wrote the defaults to the tuning file";
+            }
+            tuning.last_check = SDL_GetTicksNS();
+        }
         view.set_overlay(opts.overlay, world.map, world.layers, world.fog); // before the bake
         view.set_fog_shown(!opts.no_fog);
         if (!new_map(world, view, first_seed) || !refresh_screen(renderer, screen)) {
@@ -710,20 +968,39 @@ int main(int argc, char** argv) {
                         c.x, c.y);
             }
         }
-        // Blocks and walkers from the command line (#11).
-        for (const auto& [list, kind] : {std::pair{&opts.light_blocks, BlockKind::Light},
-                                         std::pair{&opts.heavy_blocks, BlockKind::Heavy}}) {
-            for (const SubCell c : *list) {
-                if (const char* why = place_block(world, c, kind)) {
-                    SDL_Log("block at subcell %d,%d: %s", c.x, c.y, why);
+        // A layout, then blocks, towers and walkers from the command line (#11).
+        if (opts.layout != nullptr && exit_code == 0 &&
+            !load_layout(world, view, opts.layout, arena.layout_message)) {
+            exit_code = 1;
+        }
+        struct StartPieces {
+            const std::vector<SubCell>* list;
+            BlockKind kind;
+            bool armed;
+        };
+        for (const StartPieces& sp : {StartPieces{&opts.light_blocks, BlockKind::Light, false},
+                                      StartPieces{&opts.heavy_blocks, BlockKind::Heavy, false},
+                                      StartPieces{&opts.light_towers, BlockKind::Light, true},
+                                      StartPieces{&opts.heavy_towers, BlockKind::Heavy, true}}) {
+            for (const SubCell c : *sp.list) {
+                if (const char* why = place_piece(world, view, c, sp.kind, sp.armed)) {
+                    SDL_Log("%s at subcell %d,%d: %s", sp.armed ? "tower" : "block", c.x, c.y, why);
                 }
             }
         }
         if (opts.send) {
             world.sim.send_walkers();
         }
+        if (opts.wave > 0) {
+            WaveSpec w = arena.wave;
+            w.count = opts.wave;
+            world.sim.send_wave(w);
+        }
         world.sim.set_stream(opts.stream);
-        update_routes(world);
+        world.sim.update_routes();
+        if (opts.has_select) {
+            arena.selected = tower_at(world, opts.select);
+        }
         CameraPos cam = centred_on(
             opts.has_look ? RectPx{opts.look.x * kCellPx, opts.look.y * kCellPx, kCellPx, kCellPx}
                           : core_rect(world.map),
@@ -740,8 +1017,14 @@ int main(int argc, char** argv) {
         int hover_walker = -1;
         float right_down_x = 0.0f; // where the right button went down: a click removes a block,
         float right_down_y = 0.0f; // a drag pans
+        // The arena's time (#11 phase 2): the sim runs on its own clock, scaled by the speed.
+        int speed = opts.speed;
+        bool paused = false;
+        int steps_due = 0; // single steps asked for (. and Shift+.)
+        int hover_tower = -1;
 
-        pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
+        pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame); // the camera's (real time)
+        pixeltd::FixedStep sim_step(kTickNs, kMaxSimTicksPerFrame);
         Uint64 last = SDL_GetTicksNS();
         float drag_x = 0.0f;
         float drag_y = 0.0f;
@@ -787,12 +1070,37 @@ int main(int argc, char** argv) {
                             build = BuildMode::Off;
                         }
                     } else if (e.key.key == SDLK_B) {
-                        build = build == BuildMode::Off     ? BuildMode::Light
-                                : build == BuildMode::Light ? BuildMode::Heavy
-                                                            : BuildMode::Off;
+                        build = build == BuildMode::Light   ? BuildMode::Heavy
+                                : build == BuildMode::Heavy ? BuildMode::Off
+                                                            : BuildMode::Light;
                         if (build != BuildMode::Off) {
                             probe_mode = false;
                         }
+                    } else if (e.key.key == SDLK_T) {
+                        build = build == BuildMode::LightTower   ? BuildMode::HeavyTower
+                                : build == BuildMode::HeavyTower ? BuildMode::Off
+                                                                 : BuildMode::LightTower;
+                        if (build != BuildMode::Off) {
+                            probe_mode = false;
+                        }
+                    } else if (e.key.key == SDLK_G) {
+                        if (hover_tower >= 0) {
+                            const Block& b =
+                                world.sim.blocks()[static_cast<std::size_t>(hover_tower)];
+                            world.sim.set_targeting(
+                                hover_tower,
+                                static_cast<Targeting>((static_cast<int>(b.gun.targeting) + 1) %
+                                                       kTargetings));
+                        }
+                    } else if (e.key.key == SDLK_SPACE) {
+                        paused = !paused;
+                    } else if (e.key.key == SDLK_PERIOD) {
+                        paused = true;
+                        steps_due += (e.key.mod & SDL_KMOD_SHIFT) != 0 ? 10 : 1;
+                    } else if (e.key.key == SDLK_LEFTBRACKET) {
+                        speed = std::max(0, speed - 1);
+                    } else if (e.key.key == SDLK_RIGHTBRACKET) {
+                        speed = std::min(static_cast<int>(kSpeeds.size()) - 1, speed + 1);
                     } else if (e.key.key == SDLK_E) {
                         if ((e.key.mod & SDL_KMOD_SHIFT) != 0) {
                             world.sim.set_stream(!world.sim.stream());
@@ -847,9 +1155,10 @@ int main(int argc, char** argv) {
                     if (probe_mode && e.button.button == SDL_BUTTON_LEFT) {
                         place_probe(world, view, probe_at);
                     } else if (build != BuildMode::Off && e.button.button == SDL_BUTTON_LEFT) {
-                        (void)place_block(world, build_at,
-                                          build == BuildMode::Light ? BlockKind::Light
-                                                                    : BlockKind::Heavy);
+                        (void)place_piece(world, view, build_at, build_kind(build),
+                                          build_armed(build));
+                    } else if (e.button.button == SDL_BUTTON_LEFT) {
+                        arena.selected = hover_tower; // a tower, or nothing
                     } else if (e.button.button == SDL_BUTTON_RIGHT) {
                         right_down_x = e.button.x;
                         right_down_y = e.button.y;
@@ -890,8 +1199,15 @@ int main(int argc, char** argv) {
                                  SDL_GetMouseFocus() == window && !ui_mouse;
 
             const Uint64 now = SDL_GetTicksNS();
-            const int ticks = step.advance(static_cast<std::int64_t>(now - last));
+            const auto frame_ns = static_cast<std::int64_t>(now - last);
+            const int ticks = step.advance(frame_ns);
             last = now;
+            // The sim's ticks: its clock runs at the chosen speed, or not at all while paused
+            // (single steps still run).
+            const Zoom sp = kSpeeds[static_cast<std::size_t>(speed)];
+            int sim_ticks = paused ? 0 : sim_step.advance(frame_ns * sp.num / sp.den);
+            sim_ticks += steps_due;
+            steps_due = 0;
             const bool* keys = SDL_GetKeyboardState(nullptr);
             // The same speed on screen at every zoom.
             const int pan = std::max(1, kPanPerTick * screen.zoom.den / screen.zoom.num);
@@ -925,10 +1241,20 @@ int main(int argc, char** argv) {
                     }
                 }
                 cam = clamp_camera({cam.x + dx, cam.y + dy}, screen.view);
-                // The walkers, blocks and core (#11): routes first, timed when they're rebuilt.
-                update_routes(world);
-                world.sim.tick();
             }
+            // The walkers, blocks, towers and core (#11); routes rebuild in the background.
+            for (int i = 0; i < sim_ticks; ++i) {
+                if (opts.pause_at >= 0 && world.sim.ticks() >= opts.pause_at) {
+                    paused = true;
+                    opts.pause_at = -1;
+                    break;
+                }
+                const Uint64 t0 = SDL_GetTicksNS();
+                world.sim.tick();
+                const double ms = static_cast<double>(SDL_GetTicksNS() - t0) / 1e6;
+                world.tick_ms = world.tick_ms * 0.98 + ms * 0.02;
+            }
+            watch_tuning(world, tuning, arena.tuning_message);
 
             // The world pixel under the cursor, the cell it's in, and in probe mode the probe's
             // top-left subcell so the cursor sits on its centre.
@@ -939,9 +1265,17 @@ int main(int argc, char** argv) {
             const int half = kLightSub * kSubPx / 2;
             probe_at =
                 SubCell{(wx - half + kSubPx / 2) / kSubPx, (wy - half + kSubPx / 2) / kSubPx};
-            const BlockKind build_kind =
-                build == BuildMode::Heavy ? BlockKind::Heavy : BlockKind::Light;
-            build_at = block_under(wx, wy, build_kind);
+            const BlockKind kind_now = build_kind(build);
+            build_at = block_under(wx, wy, kind_now);
+            // The test tower under the cursor; the selection is dropped if its tower is gone.
+            hover_tower = tower_at(world, SubCell{wx / kSubPx, wy / kSubPx});
+            if (arena.selected >= 0) {
+                const auto sel = static_cast<std::size_t>(arena.selected);
+                if (sel >= world.sim.blocks().size() || !world.sim.blocks()[sel].alive ||
+                    !world.sim.blocks()[sel].armed) {
+                    arena.selected = -1;
+                }
+            }
             // The walker under the cursor, if it can be seen there.
             hover_walker = world.sim.walker_at({wx, wy});
             if (hover_walker >= 0 && view.fog_shown() && world.map.core) {
@@ -962,10 +1296,41 @@ int main(int argc, char** argv) {
                     10.0f * static_cast<float>(pixel_perfect(screen.zoom)
                                                    ? screen.zoom.num
                                                    : std::max(1, screen.out_h / kStandardViewH));
-                const auto change =
-                    panel.draw(world.params, seed, world.stats, top * 2.0f, world.sim_params);
+                arena.sim = &world.sim;
+                const auto change = panel.draw(world.params, seed, world.stats, top * 3.0f,
+                                               world.sim_params, arena);
                 if (panel.sim_changed()) {
                     world.sim.set_params(world.sim_params); // no new map: walkers carry on
+                }
+                // What the arena's part of the panel asked for (#11 phase 2).
+                if (arena.send_wave) {
+                    world.sim.send_wave(arena.wave);
+                    arena.send_wave = false;
+                }
+                if (arena.save_tuning) {
+                    (void)save_tuning(world, tuning, arena.tuning_message);
+                    arena.save_tuning = false;
+                }
+                if (arena.targeting >= 0) {
+                    world.sim.set_targeting(arena.selected,
+                                            static_cast<Targeting>(arena.targeting));
+                    arena.targeting = -1;
+                }
+                if (!arena.save_layout.empty()) {
+                    SDL_CreateDirectory(layouts_dir.c_str());
+                    (void)save_layout(world, layouts_dir + arena.save_layout + ".txt",
+                                      arena.layout_message);
+                    arena.save_layout.clear();
+                }
+                if (!arena.load_layout.empty()) {
+                    if (!load_layout(world, view, layouts_dir + arena.load_layout + ".txt",
+                                     arena.layout_message)) {
+                        exit_code = 1;
+                        running = false;
+                    }
+                    seed = world.map.seed; // the layout's map, not a regenerate
+                    cam = centred_on(core_rect(world.map), screen.view);
+                    arena.load_layout.clear();
                 }
                 // A set value regenerates now; a slider being dragged at most every 120 ms (a
                 // map takes about 150 ms to generate).
@@ -1001,17 +1366,23 @@ int main(int argc, char** argv) {
                 view.draw_probe_preview(xf, world.map, probe_at, probe_fits(world, probe_at),
                                         world.probe_range_px());
             }
+            // The selected test tower's reach and readout, and the hovered one's.
+            view.draw_tower_info(xf, world.map, world.sim, arena.selected, true);
+            if (hover_tower != arena.selected) {
+                view.draw_tower_info(xf, world.map, world.sim, hover_tower, false);
+            }
             const char* refusal = nullptr;
             if (build != BuildMode::Off) {
-                refusal = block_refusal(world, build_at, build_kind);
-                view.draw_block_preview(xf, build_at, build_kind, refusal == nullptr);
+                refusal = block_refusal(world, build_at, kind_now);
+                view.draw_block_preview(xf, build_at, kind_now, refusal == nullptr);
             }
             // The HUD at the standard view's text size: scaled up in the window-sized target.
             const int hud = crisp ? 1 : std::max(1, screen.out_h / kStandardViewH);
             SDL_SetRenderScale(renderer, static_cast<float>(hud), static_cast<float>(hud));
             draw_hud(renderer, world, screen,
                      static_cast<float>(crisp ? screen.view.w : screen.out_w / hud), hover,
-                     probe_mode, view.overlay(), view.fog_shown(), build, refusal, hover_walker);
+                     probe_mode, view.overlay(), view.fog_shown(), build, refusal, hover_walker,
+                     HudArena{speed, paused, hover_tower});
             SDL_SetRenderScale(renderer, 1.0f, 1.0f);
 
             ++frame;

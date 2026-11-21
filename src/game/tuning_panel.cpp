@@ -19,6 +19,7 @@ namespace {
 
 constexpr const char* kCurveItems[] = {"linear", "smoothstep", "quintic"};
 constexpr const char* kShapeItems[] = {"normal", "ridged", "billowed"};
+constexpr const char* kTargetingItems[] = {"first", "closest", "strongest", "last"};
 
 // A preset name made safe as a file name: letters, digits, '-' and '_' only.
 std::string sanitise(const char* name) {
@@ -85,7 +86,8 @@ MapStats measure(const Map& map, double gen_ms, double bake_ms) {
     return s;
 }
 
-TuningPanel::TuningPanel(std::string presets_dir) : presets_dir_(std::move(presets_dir)) {}
+TuningPanel::TuningPanel(std::string presets_dir, std::string layouts_dir)
+    : presets_dir_(std::move(presets_dir)), layouts_dir_(std::move(layouts_dir)) {}
 
 bool TuningPanel::slider(const char* label, int* v, int lo, int hi) {
     const bool changed = ImGui::SliderInt(label, v, lo, hi);
@@ -137,8 +139,155 @@ void TuningPanel::refresh_presets() {
     presets_listed_ = true;
 }
 
+void TuningPanel::refresh_layouts() {
+    layouts_.clear();
+    int count = 0;
+    char** names = SDL_GlobDirectory(layouts_dir_.c_str(), "*.txt", 0, &count);
+    if (names != nullptr) {
+        for (int i = 0; i < count; ++i) {
+            std::string name = names[i];
+            if (name.size() > 4) {
+                name.resize(name.size() - 4); // drop ".txt"
+            }
+            layouts_.push_back(name);
+        }
+        SDL_free(static_cast<void*>(names));
+    }
+    std::sort(layouts_.begin(), layouts_.end());
+    layouts_listed_ = true;
+}
+
+void TuningPanel::arena_controls(SimParams& sim, ArenaUi& arena) {
+    const Sim* s = arena.sim;
+    const auto sim_slider = [&](const char* label, int* v, int lo, int hi) {
+        sim_changed_ = ImGui::SliderInt(label, v, lo, hi) || sim_changed_;
+    };
+
+    // --- Wave, and how the last ones went
+    if (ImGui::CollapsingHeader("Wave", ImGuiTreeNodeFlags_DefaultOpen)) {
+        WaveSpec& w = arena.wave;
+        ImGui::SliderInt("walkers per spawn", &w.count, 1, 200);
+        ImGui::SliderInt("interval (ms)", &w.interval_ms, 0, 5000);
+        ImGui::SliderInt("health %", &w.health_pct, 10, 1000);
+        ImGui::SliderInt("speed %", &w.speed_pct, 10, 400);
+        for (int i = 0; i < 3; ++i) {
+            bool on = (w.spawn_mask & (1u << static_cast<unsigned>(i))) != 0;
+            char label[16];
+            std::snprintf(label, sizeof label, "spawn %d", i + 1);
+            if (ImGui::Checkbox(label, &on)) {
+                w.spawn_mask = static_cast<std::uint8_t>(
+                    on ? (w.spawn_mask | (1u << static_cast<unsigned>(i)))
+                       : (w.spawn_mask & ~(1u << static_cast<unsigned>(i))));
+            }
+            if (i < 2) {
+                ImGui::SameLine();
+            }
+        }
+        validate(w);
+        if (ImGui::Button("Send wave")) {
+            arena.send_wave = true;
+        }
+        if (s != nullptr && !s->waves().empty()) {
+            ImGui::TextDisabled("waves, newest first:");
+            for (auto it = s->waves().rbegin(); it != s->waves().rend(); ++it) {
+                const WaveStats& ws = *it;
+                const std::int64_t end = ws.done() ? ws.end_tick : s->ticks();
+                const double secs = static_cast<double>(end - ws.start_tick) / kTicksPerSecond;
+                ImGui::Text("#%u  sent %d/%d  killed %d  leaked %d  core -%d  %.1f s%s", ws.id,
+                            ws.sent, ws.planned, ws.killed, ws.leaked, ws.core_damage, secs,
+                            ws.done() ? "" : "  (on its way)");
+            }
+        }
+    }
+
+    // --- The selected test tower
+    if (ImGui::CollapsingHeader("Selected tower", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const bool valid = s != nullptr && arena.selected >= 0 &&
+                           static_cast<std::size_t>(arena.selected) < s->blocks().size() &&
+                           s->blocks()[static_cast<std::size_t>(arena.selected)].alive &&
+                           s->blocks()[static_cast<std::size_t>(arena.selected)].armed;
+        if (valid) {
+            const Block& b = s->blocks()[static_cast<std::size_t>(arena.selected)];
+            ImGui::Text("%s test tower at subcell %d,%d",
+                        b.kind == BlockKind::Light ? "light" : "heavy", b.top_left.x, b.top_left.y);
+            ImGui::Text("health %d/%d   shots %d   damage %lld", b.health(), b.max_health,
+                        b.gun.shots, static_cast<long long>(b.gun.damage));
+            ImGui::Text("kills %d   dps %d (last 5 s)", b.gun.kills, s->tower_dps(arena.selected));
+            int t = static_cast<int>(b.gun.targeting);
+            if (ImGui::Combo("targeting", &t, kTargetingItems, kTargetings)) {
+                arena.targeting = t;
+            }
+        } else {
+            ImGui::TextDisabled("click a test tower (no build mode on) to select it");
+        }
+    }
+
+    // --- The test towers' numbers
+    if (ImGui::CollapsingHeader("Test towers")) {
+        for (const auto& [name, tp] :
+             {std::pair{"light", &sim.light_tower}, std::pair{"heavy", &sim.heavy_tower}}) {
+            ImGui::PushID(name);
+            ImGui::Text("%s tower", name);
+            sim_slider("range (px)", &tp->range_px, 8, 480);
+            sim_slider("damage a shot", &tp->damage, 1, 500);
+            sim_slider("fire interval (ms)", &tp->fire_interval_ms, 16, 5000);
+            sim_slider("shot speed (px/s)", &tp->shot_speed_px_s, 30, 3000);
+            sim_slider("health", &tp->health, 1, 20000);
+            ImGui::PopID();
+        }
+        if (ImGui::Button("Reset tower numbers")) {
+            sim.light_tower = SimParams{}.light_tower;
+            sim.heavy_tower = SimParams{}.heavy_tower;
+            sim_changed_ = true;
+        }
+    }
+    if (sim_changed_) {
+        validate(sim);
+    }
+
+    // --- The live-tuning file
+    ImGui::SeparatorText("Tuning file (reloaded when it changes)");
+    if (ImGui::Button("Save to tuning file")) {
+        arena.save_tuning = true;
+    }
+    if (!arena.tuning_message.empty()) {
+        ImGui::TextWrapped("%s", arena.tuning_message.c_str());
+    }
+    ImGui::TextDisabled("file: %s", arena.tuning_path.c_str());
+
+    // --- Layouts
+    ImGui::SeparatorText("Layouts (map, blocks and towers)");
+    if (!layouts_listed_) {
+        refresh_layouts();
+    }
+    ImGui::InputText("layout", layout_name_.data(), layout_name_.size());
+    ImGui::SameLine();
+    if (ImGui::Button("Save##layout")) {
+        const std::string name = sanitise(layout_name_.data());
+        if (name.empty()) {
+            arena.layout_message = "type a name (letters, digits, - and _)";
+        } else {
+            arena.save_layout = name;
+            layouts_listed_ = false; // list it again next frame
+        }
+    }
+    for (const std::string& name : layouts_) {
+        if (ImGui::Selectable((name + "##layout").c_str())) {
+            arena.load_layout = name;
+            std::snprintf(layout_name_.data(), layout_name_.size(), "%s", name.c_str());
+        }
+    }
+    if (ImGui::Button("Refresh##layouts")) {
+        refresh_layouts();
+    }
+    if (!arena.layout_message.empty()) {
+        ImGui::TextWrapped("%s", arena.layout_message.c_str());
+    }
+    ImGui::TextDisabled("folder: %s", layouts_dir_.c_str());
+}
+
 TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, const MapStats& stats,
-                                      float top, SimParams& sim) {
+                                      float top, SimParams& sim, ArenaUi& arena) {
     sim_changed_ = false;
     if (!open_) {
         return Change::None;
@@ -149,7 +298,7 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
     ImGui::SetNextWindowPos(ImVec2(0.0f, top), ImGuiCond_Always);
     const float width = std::min(io.DisplaySize.x * 0.42f, 520.0f * ImGui::GetStyle().FontScaleDpi);
     ImGui::SetNextWindowSize(ImVec2(width, io.DisplaySize.y - top), ImGuiCond_Always);
-    ImGui::Begin("Map tuning (Tab)", nullptr,
+    ImGui::Begin("Arena and map tuning (Tab)", nullptr,
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
     ImGui::PushItemWidth(-ImGui::GetFontSize() * 9.0f);
 
@@ -191,6 +340,9 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
                 stats.water_pct, stats.tree_pct, stats.buildable_pct);
     ImGui::Text("spawn walks: %d, %d, %d steps", stats.spawn_walk[0], stats.spawn_walk[1],
                 stats.spawn_walk[2]);
+
+    // --- The test arena (#11 phase 2)
+    arena_controls(sim, arena);
 
     // --- Generator numbers
     if (ImGui::CollapsingHeader("Mountains", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -305,8 +457,13 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
         sim_slider("marsh speed %", &sim.marsh_speed_pct, 10, 100);
         sim_slider("shallow water speed %", &sim.shallow_speed_pct, 10, 100);
         sim_slider("stream every (ms)", &sim.stream_interval_ms, 100, 20000);
+        sim_slider("route delay (ticks)", &sim.route_delay_ticks, 0, 120);
         if (ImGui::Button("Reset enemy numbers")) {
+            const TowerParams light = sim.light_tower;
+            const TowerParams heavy = sim.heavy_tower;
             sim = SimParams{};
+            sim.light_tower = light; // the towers have their own reset
+            sim.heavy_tower = heavy;
             sim_changed_ = true;
         }
         if (sim_changed_) {
