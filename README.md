@@ -42,6 +42,20 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - R shows each spawn's route to the core, with its walk time. A sealed spawn's route is orange,
     and the block its walkers will break is outlined.
   - Hovering a walker shows its speed, health and state. The HUD shows the core's health.
+- **Test arena (phase 2, placeholders):**
+  - T cycles test tower building: off, light tower, heavy tower. Towers are blocks that shoot:
+    a left-click places one, a right-click removes it.
+  - With no build mode on, a left-click on a tower selects it (its reach and readout stay shown,
+    and the panel shows it). Hovering a tower shows its reach, DPS, damage, kills and targeting;
+    G cycles its targeting (first, closest, strongest, last).
+  - Space pauses; `.` steps one tick (Shift+`.` ten); `[` and `]` change the speed (1/4 to 8x).
+  - The panel (Tab) has a wave section (walkers per spawn, interval, spawns, health and speed %,
+    Send) with the last waves' summaries, the test towers' numbers, and named layouts (the map,
+    blocks and towers) saved in `layouts/` next to the game.
+  - `tuning.txt` next to the game holds every enemy, block, tower and route number. Edit it while
+    the game runs and it reloads; the panel's "Save to tuning file" writes the current numbers.
+  - The HUD shows the speed (or PAUSED), the latest wave, and the tick time, route build time,
+    build waits, shots and towers.
 - **Developer flags:**
   - `--seed N` uses seed N (decimal, or hex with `0x`).
   - `--map-shot f.bmp` saves the whole map and exits (fully explored, unless probes are given), at `--map-scale 2|4|8` (default 4: 3840x2160).
@@ -51,6 +65,10 @@ tools/dev.sh build   # Release build, zipped into build/; unpacked copy in out/s
   - `--no-fog` starts with the fog hidden.
   - `--block X,Y` / `--heavy X,Y` place a light / heavy block at subcell X,Y (repeatable);
     `--send` sends walkers at start, `--stream` starts the stream, `--routes` shows the routes.
+  - `--tower X,Y` / `--heavy-tower X,Y` place a light / heavy test tower (repeatable);
+    `--layout FILE` starts in a saved layout; `--wave N` sends a wave of N per spawn at start;
+    `--speed X` starts at sim speed X; `--pause-at T` pauses at sim tick T; `--select X,Y` selects
+    the tower covering subcell X,Y.
   - `--window WxH` opens the window at that size (for screenshots).
   - `--preset FILE` generates with the settings in a preset file; `--panel` opens the tuning panel at start.
   - `--overlay NAME` starts in an overlay: `mountain`, `fertility` or `moisture`.

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 #include "core/los.hpp"
@@ -64,6 +65,7 @@ constexpr int kSpawnHeightPx = 16;      // how tall a spawn stands
 constexpr int kBoxShadowPx = 6;         // the core's and spawns' shadow, to the south-east
 constexpr int kLightBlockHeightPx = 12; // how tall the placeholder blocks stand (#11)
 constexpr int kHeavyBlockHeightPx = 20; //
+constexpr float kShotLiftPx = 10.0f;    // shots fly at about the turrets' height (#11 phase 2)
 
 constexpr int block_height(BlockKind k) noexcept {
     return k == BlockKind::Light ? kLightBlockHeightPx : kHeavyBlockHeightPx;
@@ -504,6 +506,7 @@ void MapView::draw(const DrawXf& xf, ViewSize view, const Fog& fog, const Sim& s
         draw_ground(xf, span);
     }
     draw_standing(xf, span, sprites, fog, sim);
+    draw_shots(xf, sim);
 
     // Fog: one texel per cell, stretched with linear filtering.
     if (fog_shown_ && core_) {
@@ -638,7 +641,7 @@ void MapView::draw_standing(const DrawXf& xf, const Rect& span, bool sprites, co
             if (st.kind == 0) {
                 draw_block(xf, sim.blocks()[i]);
             } else {
-                draw_walker(xf, sim.walkers()[i], sim.params().walker_health);
+                draw_walker(xf, sim.walkers()[i]);
             }
         }
         if (y == core_row) {
@@ -727,28 +730,44 @@ void MapView::draw_health(const DrawXf& xf, int x, int y, int w, int health, int
 
 void MapView::draw_block(const DrawXf& xf, const Block& b) const {
     // A placeholder block standing on its footprint, like the core: a shadow, the front face, and
-    // the top raised by its height; a health bar once it's damaged.
+    // the top raised by its height; a health bar once it's damaged. A test tower (#11 phase 2) is
+    // a teal block with a turret on top, its barrel towards where it last aimed.
     const RectPx foot = rect_of(b.top_left, b.size_sub());
     const int h = block_height(b.kind);
     const SDL_FRect shade = xf.rect(RectPx{foot.x + 4, foot.y + 4, foot.w, foot.h});
     SDL_SetRenderDrawColor(renderer_, 10, 14, 10, 70);
     SDL_RenderFillRect(renderer_, &shade);
     const SDL_FRect front = xf.rect(RectPx{foot.x, foot.y + foot.h - h, foot.w, h});
-    SDL_SetRenderDrawColor(renderer_, 84, 88, 96, 255);
+    if (b.armed) {
+        SDL_SetRenderDrawColor(renderer_, 46, 82, 90, 255);
+    } else {
+        SDL_SetRenderDrawColor(renderer_, 84, 88, 96, 255);
+    }
     SDL_RenderFillRect(renderer_, &front);
     const SDL_FRect top = xf.rect(RectPx{foot.x, foot.y - h, foot.w, foot.h});
-    SDL_SetRenderDrawColor(renderer_, 128, 134, 142, 255);
+    if (b.armed) {
+        SDL_SetRenderDrawColor(renderer_, 70, 124, 132, 255);
+    } else {
+        SDL_SetRenderDrawColor(renderer_, 128, 134, 142, 255);
+    }
     SDL_RenderFillRect(renderer_, &top);
     const SDL_FRect inner = xf.rect(RectPx{foot.x + 3, foot.y - h + 3, foot.w - 6, foot.h - 6});
-    SDL_SetRenderDrawColor(renderer_, 150, 156, 164, 255);
+    if (b.armed) {
+        SDL_SetRenderDrawColor(renderer_, 92, 152, 160, 255);
+    } else {
+        SDL_SetRenderDrawColor(renderer_, 150, 156, 164, 255);
+    }
     SDL_RenderFillRect(renderer_, &inner);
     SDL_SetRenderDrawColor(renderer_, 40, 44, 50, 255);
     SDL_RenderRect(renderer_, &top);
     SDL_RenderRect(renderer_, &front);
+    if (b.armed) {
+        draw_turret(xf, b, foot, h);
+    }
     draw_health(xf, foot.x + 3, foot.y - h + 2, foot.w - 6, b.health(), b.max_health);
 }
 
-void MapView::draw_walker(const DrawXf& xf, const Walker& w, int max_health) const {
+void MapView::draw_walker(const DrawXf& xf, const Walker& w) const {
     // The beetle stands on its 16 px square: a small shadow, the sprite rising a little over the
     // square behind, and a health bar over it once it's hurt.
     const PointPx c = w.centre();
@@ -766,7 +785,7 @@ void MapView::draw_walker(const DrawXf& xf, const Walker& w, int max_health) con
         const SDL_FRect spark = xf.rect(RectPx{c.x + 3, c.y - 12, 2, 2});
         SDL_RenderFillRect(renderer_, &spark);
     }
-    draw_health(xf, c.x - 6, c.y - 13, 12, w.health, max_health);
+    draw_health(xf, c.x - 6, c.y - 13, 12, w.health, w.max_health);
 }
 
 void MapView::draw_block_preview(const DrawXf& xf, SubCell top_left, BlockKind kind,
@@ -838,14 +857,15 @@ void MapView::draw_routes(const DrawXf& xf, const Fog& fog, const Sim& sim) cons
         // Its length and walk time, under the spawn.
         char label[64];
         const double seconds = static_cast<double>(sim.cost_ms(sr.route.cost)) / 1000.0;
+        const char* pending = sim.routes_pending() || sim.routes_dirty() ? " (pending)" : "";
         if (sr.route.nodes.empty()) {
             std::snprintf(label, sizeof label, "no route");
         } else if (sr.route.sealed) {
-            std::snprintf(label, sizeof label, "SEALED: breach %.0f cells %.0f s",
-                          static_cast<double>(sr.length_px) / kCellPx, seconds);
+            std::snprintf(label, sizeof label, "SEALED: breach %.0f cells %.0f s%s",
+                          static_cast<double>(sr.length_px) / kCellPx, seconds, pending);
         } else {
-            std::snprintf(label, sizeof label, "route %.0f cells %.0f s",
-                          static_cast<double>(sr.length_px) / kCellPx, seconds);
+            std::snprintf(label, sizeof label, "route %.0f cells %.0f s%s",
+                          static_cast<double>(sr.length_px) / kCellPx, seconds, pending);
         }
         const Spawn& s = spawns_[i];
         SDL_SetRenderDrawColor(renderer_, 255, 240, 220, 255);
@@ -854,28 +874,81 @@ void MapView::draw_routes(const DrawXf& xf, const Fog& fog, const Sim& sim) cons
     }
 }
 
-void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_left, bool legal,
-                                 int range_px) const {
+void MapView::draw_turret(const DrawXf& xf, const Block& b, const RectPx& foot, int h) const {
+    // A dark square turret in the middle of the top, and a barrel towards its last aim (north
+    // until it has fired).
+    const int size = b.kind == BlockKind::Light ? 10 : 18;
+    const int barrel = b.kind == BlockKind::Light ? 9 : 15;
+    const int cx = foot.x + foot.w / 2;
+    const int cy = foot.y - h + foot.h / 2;
+    const PointPx c = centre_of(b.top_left, b.size_sub());
+    float dx = 0.0f;
+    float dy = -1.0f;
+    if (b.gun.shots > 0) {
+        const auto ax = static_cast<float>(b.gun.aim.x - c.x);
+        const auto ay = static_cast<float>(b.gun.aim.y - c.y);
+        const float len = std::sqrt(ax * ax + ay * ay);
+        if (len > 0.5f) {
+            dx = ax / len;
+            dy = ay / len;
+        }
+    }
+    const auto fx = static_cast<float>(cx);
+    const auto fy = static_cast<float>(cy);
+    const auto fb = static_cast<float>(barrel);
+    SDL_SetRenderDrawColor(renderer_, 200, 236, 240, 255);
+    for (int t = -1; t <= 1; ++t) {
+        // Three lines side by side: a barrel about 2 px thick at any zoom step.
+        const float ox = -dy * static_cast<float>(t) * 0.6f;
+        const float oy = dx * static_cast<float>(t) * 0.6f;
+        SDL_RenderLine(renderer_, xf.x(fx + ox), xf.y(fy + oy), xf.x(fx + ox + dx * fb),
+                       xf.y(fy + oy + dy * fb));
+    }
+    const SDL_FRect body = xf.rect(RectPx{cx - size / 2, cy - size / 2, size, size});
+    SDL_SetRenderDrawColor(renderer_, 30, 46, 54, 255);
+    SDL_RenderFillRect(renderer_, &body);
+    const SDL_FRect lens = xf.rect(RectPx{cx - 1, cy - 1, 3, 3});
+    SDL_SetRenderDrawColor(renderer_, 140, 255, 230, 255);
+    SDL_RenderFillRect(renderer_, &lens);
+}
+
+void MapView::draw_shots(const DrawXf& xf, const Sim& sim) const {
+    // Each shot in flight: a 2 x 2 spark with a tick's trail behind it, lifted to the turrets'
+    // height so it reads as flying.
+    for (const Projectile& p : sim.projectiles()) {
+        if (!p.alive) {
+            continue;
+        }
+        const float x = static_cast<float>(p.x) / static_cast<float>(kFix);
+        const float y = static_cast<float>(p.y) / static_cast<float>(kFix) - kShotLiftPx;
+        const float tx = x - static_cast<float>(p.vx) / static_cast<float>(kFix);
+        const float ty = y - static_cast<float>(p.vy) / static_cast<float>(kFix);
+        SDL_SetRenderDrawColor(renderer_, 255, 190, 90, 170);
+        SDL_RenderLine(renderer_, xf.x(tx), xf.y(ty), xf.x(x), xf.y(y));
+        const SDL_FRect spark{xf.x(x - 1.0f), xf.y(y - 1.0f), 2.0f * xf.k, 2.0f * xf.k};
+        SDL_SetRenderDrawColor(renderer_, 255, 245, 170, 255);
+        SDL_RenderFillRect(renderer_, &spark);
+    }
+}
+
+void MapView::draw_reach(const DrawXf& xf, const Map& map, PointPx centre, int range_px) const {
+    // Within the reach (a circle): cells in sight get a light tint; cells hidden behind rock are
+    // shaded, so blocked sight lines show.
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-    const PointPx centre = centre_of(top_left, kLightSub);
-    // Within its reach (a circle): cells it sees get a light tint; cells hidden behind rock
-    // formations are shaded, so blocked sight lines show.
-    const int reach = range_px;
-    const long long reach2 = static_cast<long long>(reach) * reach;
-    for (int cy = (centre.y - reach) / kCellPx; cy <= (centre.y + reach) / kCellPx; ++cy) {
-        for (int cx = (centre.x - reach) / kCellPx; cx <= (centre.x + reach) / kCellPx; ++cx) {
+    const long long reach2 = static_cast<long long>(range_px) * range_px;
+    for (int cy = (centre.y - range_px) / kCellPx; cy <= (centre.y + range_px) / kCellPx; ++cy) {
+        for (int cx = (centre.x - range_px) / kCellPx; cx <= (centre.x + range_px) / kCellPx;
+             ++cx) {
             if (!map.rock.in_bounds(cx, cy)) {
                 continue;
             }
             const PointPx c = centre_of(Cell{cx, cy});
             const long long dx = c.x - centre.x;
             const long long dy = c.y - centre.y;
-            const long long d2 = dx * dx + dy * dy;
-            if (d2 > reach2) {
+            if (dx * dx + dy * dy > reach2) {
                 continue;
             }
-            const bool covered = can_see(map, centre, c);
-            if (covered) {
+            if (can_see(map, centre, c)) {
                 SDL_SetRenderDrawColor(renderer_, 250, 220, 120, 40);
             } else {
                 SDL_SetRenderDrawColor(renderer_, 10, 8, 20, 120);
@@ -884,6 +957,44 @@ void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_l
             SDL_RenderFillRect(renderer_, &cell);
         }
     }
+}
+
+void MapView::draw_tower_info(const DrawXf& xf, const Map& map, const Sim& sim, int slot,
+                              bool selected) const {
+    if (slot < 0 || static_cast<std::size_t>(slot) >= sim.blocks().size()) {
+        return;
+    }
+    const Block& b = sim.blocks()[static_cast<std::size_t>(slot)];
+    if (!b.alive || !b.armed) {
+        return;
+    }
+    const TowerParams& tp = sim.tower_params(b.kind);
+    draw_reach(xf, map, centre_of(b.top_left, b.size_sub()), tp.range_px);
+    const RectPx foot = rect_of(b.top_left, b.size_sub());
+    const int h = block_height(b.kind);
+    if (selected) {
+        SDL_SetRenderDrawColor(renderer_, 140, 255, 230, 255);
+        const SDL_FRect m = xf.rect(RectPx{foot.x - 2, foot.y - h - 2, foot.w + 4, foot.h + h + 4});
+        SDL_RenderRect(renderer_, &m);
+    }
+    // Its readout over it.
+    char label[96];
+    std::snprintf(label, sizeof label, "dps %d  dmg %lld  kills %d  %s", sim.tower_dps(slot),
+                  static_cast<long long>(b.gun.damage), b.gun.kills,
+                  targeting_name(b.gun.targeting));
+    const float lx = xf.x(static_cast<float>(foot.x));
+    const float ly = xf.y(static_cast<float>(foot.y - h - 12));
+    const SDL_FRect back{lx - 1.0f, ly - 1.0f, static_cast<float>(std::strlen(label)) * 8.0f + 2.0f,
+                         10.0f};
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 160);
+    SDL_RenderFillRect(renderer_, &back);
+    SDL_SetRenderDrawColor(renderer_, 170, 255, 235, 255);
+    SDL_RenderDebugText(renderer_, lx, ly, label);
+}
+
+void MapView::draw_probe_preview(const DrawXf& xf, const Map& map, SubCell top_left, bool legal,
+                                 int range_px) const {
+    draw_reach(xf, map, centre_of(top_left, kLightSub), range_px);
     draw_probe(xf, top_left, legal ? SDL_Color{250, 220, 120, 200} : SDL_Color{240, 80, 60, 200});
 }
 

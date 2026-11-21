@@ -68,7 +68,8 @@ class MapView {
     [[nodiscard]] bool fog_shown() const noexcept { return fog_shown_; }
 
     // Draws into the current render target: the terrain, then what stands on it (cliff walls,
-    // trees, blocks, walkers, the core, the spawns that have been found), then the fog. Walkers on
+    // trees, blocks, test towers, walkers, the core, the spawns that have been found), the shots
+    // in flight, then the fog. Walkers on
     // unexplored ground are hidden while the fog is shown. `view` is the world area the target
     // shows, in world pixels.
     void draw(const DrawXf& xf, ViewSize view, const Fog& fog, const Sim& sim) const;
@@ -77,6 +78,11 @@ class MapView {
     // walk time; a sealed spawn's route follows the breach route, and the block its walkers will
     // attack is outlined.
     void draw_routes(const DrawXf& xf, const Fog& fog, const Sim& sim) const;
+
+    // A test tower's reach and sight (cells it sees tinted, those behind rock shaded) and its
+    // readout: DPS, damage, kills and targeting (#11 phase 2). Outlined when it's selected.
+    void draw_tower_info(const DrawXf& xf, const Map& map, const Sim& sim, int slot,
+                         bool selected) const;
 
     // Build mode's preview: a block of `kind` at `top_left`, green if it can go there, red if not.
     void draw_block_preview(const DrawXf& xf, SubCell top_left, BlockKind kind, bool legal) const;
@@ -104,7 +110,12 @@ class MapView {
     void draw_core(const DrawXf& xf) const;
     void draw_spawn(const DrawXf& xf, const Spawn& s) const;
     void draw_block(const DrawXf& xf, const Block& b) const;
-    void draw_walker(const DrawXf& xf, const Walker& w, int max_health) const;
+    void draw_turret(const DrawXf& xf, const Block& b, const RectPx& foot, int h) const;
+    void draw_walker(const DrawXf& xf, const Walker& w) const;
+    // The test towers' shots in flight.
+    void draw_shots(const DrawXf& xf, const Sim& sim) const;
+    // A reach circle around `centre`: cells in sight tinted, cells behind rock shaded.
+    void draw_reach(const DrawXf& xf, const Map& map, PointPx centre, int range_px) const;
     // A health bar `w` px wide with its top-left at (x, y), in world pixels.
     void draw_health(const DrawXf& xf, int x, int y, int w, int health, int max_health) const;
     // A spawn's top face: its 2 x 2 cells, raised by its height.
