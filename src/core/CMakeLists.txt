@@ -6,13 +6,17 @@ add_library(pixeltd_core STATIC
   flow.cpp
   los.cpp
   gen_params.cpp
+  layout.cpp
   mapgen.cpp
   overlay.cpp
   preset.cpp
   sim.cpp
   sim_params.cpp
+  sim_tuning.cpp
   simplex.cpp
   terrain.cpp)
 target_include_directories(pixeltd_core PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_compile_features(pixeltd_core PUBLIC cxx_std_20)
-target_link_libraries(pixeltd_core PRIVATE pixeltd_warnings)
+# Route builds run on a worker thread (#11 phase 2).
+find_package(Threads REQUIRED)
+target_link_libraries(pixeltd_core PUBLIC Threads::Threads PRIVATE pixeltd_warnings)

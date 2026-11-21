@@ -1,11 +1,11 @@
 #include "core/preset.hpp"
 
 #include <array>
-#include <cerrno>
 #include <cstddef>
-#include <cstdlib>
 #include <string>
 #include <vector>
+
+#include "core/text.hpp"
 
 namespace pixeltd {
 namespace {
@@ -114,31 +114,6 @@ int* core_area_field(GenParams& p, std::string_view key) {
         return &p.core_area.h;
     }
     return nullptr;
-}
-
-std::string_view trim(std::string_view s) {
-    const auto first = s.find_first_not_of(" \t\r");
-    if (first == std::string_view::npos) {
-        return {};
-    }
-    const auto last = s.find_last_not_of(" \t\r");
-    return s.substr(first, last - first + 1);
-}
-
-// A whole decimal integer (optionally signed), nothing else.
-bool parse_int(std::string_view s, int& out) {
-    const std::string str(trim(s));
-    if (str.empty()) {
-        return false;
-    }
-    char* end = nullptr;
-    errno = 0;
-    const long v = std::strtol(str.c_str(), &end, 10);
-    if (end == str.c_str() || *end != '\0' || errno != 0 || v < -1000000000L || v > 1000000000L) {
-        return false;
-    }
-    out = static_cast<int>(v);
-    return true;
 }
 
 template <std::size_t N>

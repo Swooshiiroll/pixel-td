@@ -12,3 +12,4 @@ Each doc has: purpose, rules and numbers, interactions, UI, edge cases, scope, a
 | [world.md](world.md) | World layout and the map generator: grid, terrain, core zone, paths, line of sight, fog, camera |
 | [towers.md](towers.md) | Tower system: chassis + weapon + module, evolution, gold Mk upgrades, draft, swaps |
 | [pathfinding.md](pathfinding.md) | Enemy pathfinding and mazing: flow fields on the subgrid, slow ground, breaking through, placeholder walkers and blocks (#11) |
+| [test-arena.md](test-arena.md) | The test arena and live tuning: placeholder test towers and shots, waves and summaries, time controls, readouts, the tuning file, saved layouts, background route builds (#11 phase 2) |

@@ -7,7 +7,7 @@ Big systems have their own docs:
 - [world.md](world.md): world layout and the map generator.
 - [towers.md](towers.md): the tower system.
 - [pathfinding.md](pathfinding.md): enemy pathfinding and mazing (#11).
-- `test-arena.md`: the test arena and live tuning (not written yet).
+- [test-arena.md](test-arena.md): the test arena and live tuning.
 
 ## Purpose
 
@@ -87,9 +87,9 @@ real map generator, so the generator comes first.
    - fog;
    - the camera.
 2. **Enemy pathfinding and mazing** ([pathfinding.md](pathfinding.md), issue #11), then the
-   **test arena + live tuning** (`test-arena.md`): enemies find their own way, and towers shape the
-   route. Phase 1 (placeholder walkers, blocks, routes, breaking through) is designed; the arena
-   tools get their own question round.
+   **test arena + live tuning** ([test-arena.md](test-arena.md)): enemies find their own way, and
+   towers shape the route. Phase 1: placeholder walkers, blocks, routes, breaking through. Phase 2:
+   placeholder test towers, waves, time controls, readouts, a live-tuning file and saved layouts.
 3. **First parts**, designed by pitch and pick and tuned in the arena ([towers.md](towers.md)).
 4. **Minimal run loop:** waves, the draft, gold and the core falling.
 
@@ -109,4 +109,3 @@ real map generator, so the generator comes first.
 - Economy: gold income, costs and refunds.
 - Perks, modifiers and risk/reward events: what they are and how often they're offered.
 - How the run ends: core health or lives, and what damages it.
-- The test arena and live tuning: their own question round, before step 2.
