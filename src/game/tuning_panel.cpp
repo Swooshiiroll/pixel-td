@@ -138,7 +138,8 @@ void TuningPanel::refresh_presets() {
 }
 
 TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, const MapStats& stats,
-                                      float top) {
+                                      float top, SimParams& sim) {
+    sim_changed_ = false;
     if (!open_) {
         return Change::None;
     }
@@ -285,6 +286,32 @@ TuningPanel::Change TuningPanel::draw(GenParams& params, std::uint64_t& seed, co
     // and probes update on the next regenerate.
     if (ImGui::CollapsingHeader("Towers and range")) {
         slider("light range (px)", &params.light_range_px, 8, 400);
+    }
+    // Not generation either (#11): the walkers', blocks' and core's numbers apply live, on this
+    // map. Block health applies to blocks placed from now on.
+    if (ImGui::CollapsingHeader("Enemies and blocks")) {
+        const auto sim_slider = [&](const char* label, int* v, int lo, int hi) {
+            sim_changed_ = ImGui::SliderInt(label, v, lo, hi) || sim_changed_;
+        };
+        sim_slider("walker speed (px/s)", &sim.walker_speed_px_s, 4, 256);
+        sim_slider("walker health", &sim.walker_health, 1, 2000);
+        sim_slider("walker attack /s", &sim.walker_attack_per_s, 1, 500);
+        sim_slider("walker core hit", &sim.walker_core_hit, 0, 1000);
+        sim_slider("light block health", &sim.light_block_health, 1, 5000);
+        sim_slider("heavy block health", &sim.heavy_block_health, 1, 15000);
+        sim_slider("core health", &sim.core_health, 1, 20000);
+        sim_slider("trees speed %", &sim.tree_speed_pct, 10, 100);
+        sim_slider("mud speed %", &sim.mud_speed_pct, 10, 100);
+        sim_slider("marsh speed %", &sim.marsh_speed_pct, 10, 100);
+        sim_slider("shallow water speed %", &sim.shallow_speed_pct, 10, 100);
+        sim_slider("stream every (ms)", &sim.stream_interval_ms, 100, 20000);
+        if (ImGui::Button("Reset enemy numbers")) {
+            sim = SimParams{};
+            sim_changed_ = true;
+        }
+        if (sim_changed_) {
+            validate(sim);
+        }
     }
 
     // --- Presets (settings only)

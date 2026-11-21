@@ -5,6 +5,7 @@
 // Camera).
 //
 //   PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] [--zoom STEP] [--look X,Y] [--no-fog]
+//           [--block X,Y]... [--heavy X,Y]... [--send] [--stream] [--routes]
 //           [--window WxH] [--preset FILE] [--panel] [--map-shot file.bmp] [--map-scale N]
 //           [--frames N] [--screenshot file.bmp]
 //     --seed N          developer tool: generate the map from seed N (decimal, or 0x hex)
@@ -16,7 +17,12 @@
 //                       whole-number scale N
 //     --look X,Y        developer tool: start with the camera centred on cell X,Y (#35)
 //     --no-fog          developer tool: start with the fog hidden (F toggles it)
-//     --window WxH      developer tool: open the window at W x H (screenshots)
+//     --block X,Y       developer tool: place a light block with its top-left at subcell X,Y
+//                       (repeatable; --heavy X,Y for a heavy one) (#11)
+//     --send            developer tool: send a walker from every spawn at start (E)
+//     --stream          developer tool: start with the walker stream on (Shift+E)
+//     --routes          developer tool: start with the route lines shown (R)
+//     --window WxH     developer tool: open the window at W x H (screenshots)
 //     --preset FILE     developer tool: generate with the settings in a preset file (#21)
 //     --panel           developer tool: open the map-tuning panel at start (Tab toggles it)
 //     --map-shot F      developer tool: save the whole 15360x8640 map to F (BMP), shrunk by
@@ -29,11 +35,15 @@
 // + and -, out to the whole map; developer tools: P toggles probe placement and a left-click
 // places one (a light tower's sight and reach), O / Shift+O step through the overlays, F hides
 // and shows the fog, F5 makes a new random map, Tab opens the map-tuning panel; Esc quits.
+// Pathfinding (#11): B cycles build mode (off, light block, heavy block; left-click places,
+// right-click removes), E sends a walker from every spawn, Shift+E toggles the stream, R shows
+// the routes; hovering a walker shows its stats.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -51,6 +61,8 @@
 #include "core/map.hpp"
 #include "core/mapgen.hpp"
 #include "core/overlay.hpp"
+#include "core/sim.hpp"
+#include "core/sim_params.hpp"
 #include "core/terrain.hpp"
 #include "game/map_view.hpp"
 #include "game/tuning_panel.hpp"
@@ -89,6 +101,12 @@ struct Options {
     int zoom_scale = 0;
     bool has_look = false;
     Cell look{};
+    // Pathfinding (#11): blocks placed at start (top-left subcells), and walkers on their way.
+    std::vector<SubCell> light_blocks;
+    std::vector<SubCell> heavy_blocks;
+    bool send = false;
+    bool stream = false;
+    bool routes = false;
     bool no_fog = false;
     const char* preset = nullptr;
     bool panel = false;
@@ -138,6 +156,21 @@ bool parse_options(int argc, char** argv, Options& out) {
                 return false;
             }
             out.probes.push_back(c);
+        } else if ((std::strcmp(argv[i], "--block") == 0 || std::strcmp(argv[i], "--heavy") == 0) &&
+                   has_value) {
+            const bool heavy = argv[i][2] == 'h';
+            SubCell c;
+            if (!parse_pair(argv[++i], ',', c.x, c.y)) {
+                std::fprintf(stderr, "--block and --heavy take a subcell as X,Y\n");
+                return false;
+            }
+            (heavy ? out.heavy_blocks : out.light_blocks).push_back(c);
+        } else if (std::strcmp(argv[i], "--send") == 0) {
+            out.send = true;
+        } else if (std::strcmp(argv[i], "--stream") == 0) {
+            out.stream = true;
+        } else if (std::strcmp(argv[i], "--routes") == 0) {
+            out.routes = true;
         } else if (std::strcmp(argv[i], "--overlay") == 0 && has_value) {
             if (!parse_overlay(argv[++i], out.overlay)) {
                 std::fprintf(stderr, "--overlay takes mountain, fertility or moisture\n");
@@ -186,7 +219,8 @@ bool parse_options(int argc, char** argv, Options& out) {
             std::fprintf(
                 stderr,
                 "usage: PixelTD [--seed N] [--probe X,Y]... [--overlay NAME] "
-                "[--zoom whole|half|N] [--look X,Y] [--no-fog] [--window WxH] [--preset FILE] "
+                "[--zoom whole|half|N] [--look X,Y] [--no-fog] [--block X,Y]... "
+                "[--heavy X,Y]... [--send] [--stream] [--routes] [--window WxH] [--preset FILE] "
                 "[--panel] [--map-shot file.bmp] [--map-scale 2|4|8] [--frames N] "
                 "[--screenshot file.bmp]\n");
             return false;
@@ -208,6 +242,11 @@ struct World {
     std::vector<SubCell> probes; // top-left subcells of placed probes (light-tower sized)
     double gen_ms = 0.0;
     game::MapStats stats; // for the tuning panel
+    // Pathfinding and mazing, phase 1 (#11): walkers, blocks and the core's health. Started over
+    // with every new map; its numbers carry over.
+    Sim sim;
+    SimParams sim_params;
+    double route_ms = 0.0; // how long the last route rebuild took
 
     [[nodiscard]] int probe_range_px() const noexcept { return params.light_range_px; }
 };
@@ -217,9 +256,22 @@ bool overlap(SubCell a, int a_size, SubCell b, int b_size) {
     return a.x < b.x + b_size && b.x < a.x + a_size && a.y < b.y + b_size && b.y < a.y + a_size;
 }
 
-// A probe can go where a light tower could: off rock formations, the core and other probes.
+// True if any subcell of a size x size footprint is under a block.
+bool on_block(const World& world, SubCell top_left, int size) {
+    for (int y = top_left.y; y < top_left.y + size; ++y) {
+        for (int x = top_left.x; x < top_left.x + size; ++x) {
+            if (world.sim.block_at({x, y}) >= 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// A probe can go where a light tower could: on buildable ground, off the core, blocks and other
+// probes.
 bool probe_fits(const World& world, SubCell top_left) {
-    if (!placement_ok(world.map, top_left, kLightSub)) {
+    if (!placement_ok(world.map, top_left, kLightSub) || on_block(world, top_left, kLightSub)) {
         return false;
     }
     if (world.map.core && overlap(top_left, kLightSub, *world.map.core, kCoreSub)) {
@@ -252,12 +304,57 @@ bool new_map(World& world, MapView& view, std::uint64_t seed) {
     const Map& m = world.map;
     const bool ok = view.set_map(m, world.layers, world.fog);
     world.stats = game::measure(m, world.gen_ms, view.bake_ms());
+    world.sim.reset(m, world.sim_params);
     SDL_Log("map seed 0x%016llx: generated in %.2f ms (attempt %d%s), baked in %.1f ms; core at "
             "subcell %d,%d; %zu spawns",
             static_cast<unsigned long long>(seed), world.gen_ms, m.stats.attempts,
             m.stats.fallback ? ", FALLBACK" : "", view.bake_ms(), m.core ? m.core->x : -1,
             m.core ? m.core->y : -1, m.spawns.size());
+    for (const Spawn& s : m.spawns) {
+        SDL_Log("  spawn at cell %d,%d (wave %d)", s.cell.x, s.cell.y, s.opens_at_wave);
+    }
     return ok;
+}
+
+// Brings the sim's routes up to date, timing the rebuild (it's the one costly step, #11).
+void update_routes(World& world) {
+    if (!world.sim.routes_dirty()) {
+        return;
+    }
+    const Uint64 start = SDL_GetTicksNS();
+    world.sim.update_routes();
+    world.route_ms = static_cast<double>(SDL_GetTicksNS() - start) / 1e6;
+}
+
+// Build mode (#11): off, or placing light or heavy blocks.
+enum class BuildMode : std::uint8_t { Off, Light, Heavy };
+
+// The block a build-mode click places: its top-left subcell, so the cursor sits on its centre.
+SubCell block_under(int wx, int wy, BlockKind kind) {
+    const int half = block_size_sub(kind) * kSubPx / 2;
+    return SubCell{(wx - half + kSubPx / 2) / kSubPx, (wy - half + kSubPx / 2) / kSubPx};
+}
+
+// Why a block can't go at `top_left` (the sim's rules, and not on a probe), or nullptr if it can.
+const char* block_refusal(const World& world, SubCell top_left, BlockKind kind) {
+    const int size = block_size_sub(kind);
+    for (const SubCell p : world.probes) {
+        if (top_left.x < p.x + kLightSub && p.x < top_left.x + size &&
+            top_left.y < p.y + kLightSub && p.y < top_left.y + size) {
+            return "on a probe";
+        }
+    }
+    const Place p = world.sim.can_place(top_left, kind);
+    return p == Place::Ok ? nullptr : place_name(p);
+}
+
+// Places a block; the reason when it can't go there, or nullptr.
+const char* place_block(World& world, SubCell top_left, BlockKind kind) {
+    const char* why = block_refusal(world, top_left, kind);
+    if (why == nullptr) {
+        (void)world.sim.place_block(top_left, kind);
+    }
+    return why;
 }
 
 bool save_target(SDL_Renderer* r, const char* path) {
@@ -389,7 +486,8 @@ void describe_overlay(const World& world, Overlay overlay, Cell hover, char* out
 
 // The HUD, drawn into the current target `width` pixels wide (in HUD pixels).
 void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width, Cell hover,
-              bool probe_mode, Overlay overlay, bool fog_shown) {
+              bool probe_mode, Overlay overlay, bool fog_shown, BuildMode build,
+              const char* refusal, int hover_walker) {
     char line[224];
     char ground[64] = "";
     char zoom[32];
@@ -424,18 +522,61 @@ void draw_hud(SDL_Renderer* r, const World& world, const Screen& s, float width,
                   static_cast<unsigned long long>(m.seed), zoom, area, world.gen_ms, hover.x,
                   hover.y, ground, fog_shown ? "" : "  [fog off]",
                   probe_mode ? "  [PROBE: click to place]" : "");
-    const bool second = overlay != Overlay::Off;
-    const SDL_FRect strip{0.0f, 0.0f, width, second ? 20.0f : 10.0f};
+    // The sim (#11): the core, the walkers, the stream, the last route rebuild and build mode.
+    const Sim& sim = world.sim;
+    char sim_line[224];
+    const char* mode =
+        build == BuildMode::Light   ? "  [BUILD light: click places, right-click removes]"
+        : build == BuildMode::Heavy ? "  [BUILD heavy: click places, right-click removes]"
+                                    : "";
+    char core[48];
+    if (sim.core_fallen()) {
+        std::snprintf(core, sizeof core, "CORE FALLEN");
+    } else {
+        std::snprintf(core, sizeof core, "core %d/%d", sim.core_health(), sim.params().core_health);
+    }
+    std::snprintf(sim_line, sizeof sim_line, "%s  walkers %zu  stream %s  routes %.0fms%s%s%s",
+                  core, sim.walkers().size(), sim.stream() ? "on" : "off", world.route_ms, mode,
+                  refusal != nullptr ? "  can't: " : "", refusal != nullptr ? refusal : "");
+    // A hovered walker's stats.
+    char walker_line[160] = "";
+    if (hover_walker >= 0) {
+        const Walker& w = sim.walkers()[static_cast<std::size_t>(hover_walker)];
+        const char* state = w.state == WalkerState::Breaking ? "breaking a block"
+                            : w.state == WalkerState::Stuck  ? "stuck"
+                                                             : "walking";
+        std::snprintf(walker_line, sizeof walker_line,
+                      "walker #%u  speed %d px/s (%d%%)  health %d/%d  %s%s", w.id,
+                      sim.params().walker_speed_px_s * w.speed_pct / 100, w.speed_pct, w.health,
+                      sim.params().walker_health, state, w.sealed ? " (sealed in)" : "");
+    }
+
+    const bool overlay_line = overlay != Overlay::Off;
+    const int lines = 2 + (overlay_line ? 1 : 0) + (walker_line[0] != '\0' ? 1 : 0);
+    const SDL_FRect strip{0.0f, 0.0f, width, 10.0f * static_cast<float>(lines)};
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
     SDL_RenderFillRect(r, &strip);
     SDL_SetRenderDrawColor(r, 170, 236, 210, 255);
     SDL_RenderDebugText(r, 2.0f, 1.0f, line);
-    if (second) {
+    float y = 11.0f;
+    if (overlay_line) {
         char view[128];
         describe_overlay(world, overlay, hover, view, sizeof view);
         SDL_SetRenderDrawColor(r, 255, 220, 140, 255);
-        SDL_RenderDebugText(r, 2.0f, 11.0f, view);
+        SDL_RenderDebugText(r, 2.0f, y, view);
+        y += 10.0f;
+    }
+    if (sim.core_fallen()) {
+        SDL_SetRenderDrawColor(r, 255, 110, 90, 255);
+    } else {
+        SDL_SetRenderDrawColor(r, 200, 210, 255, 255);
+    }
+    SDL_RenderDebugText(r, 2.0f, y, sim_line);
+    y += 10.0f;
+    if (walker_line[0] != '\0') {
+        SDL_SetRenderDrawColor(r, 230, 200, 255, 255);
+        SDL_RenderDebugText(r, 2.0f, y, walker_line);
     }
 }
 
@@ -470,7 +611,7 @@ int run_map_shot(SDL_Renderer* r, std::uint64_t seed, const std::vector<SubCell>
     }
     SDL_SetRenderTarget(r, full);
     const DrawXf xf{CameraPos{0, 0}, 1.0f / static_cast<float>(scale), true};
-    view.draw(xf, {kMapPxW, kMapPxH}, world.fog);
+    view.draw(xf, {kMapPxW, kMapPxH}, world.fog, world.sim);
     for (const SubCell c : world.probes) {
         view.draw_probe(xf, c, kProbeColour);
     }
@@ -569,6 +710,20 @@ int main(int argc, char** argv) {
                         c.x, c.y);
             }
         }
+        // Blocks and walkers from the command line (#11).
+        for (const auto& [list, kind] : {std::pair{&opts.light_blocks, BlockKind::Light},
+                                         std::pair{&opts.heavy_blocks, BlockKind::Heavy}}) {
+            for (const SubCell c : *list) {
+                if (const char* why = place_block(world, c, kind)) {
+                    SDL_Log("block at subcell %d,%d: %s", c.x, c.y, why);
+                }
+            }
+        }
+        if (opts.send) {
+            world.sim.send_walkers();
+        }
+        world.sim.set_stream(opts.stream);
+        update_routes(world);
         CameraPos cam = centred_on(
             opts.has_look ? RectPx{opts.look.x * kCellPx, opts.look.y * kCellPx, kCellPx, kCellPx}
                           : core_rect(world.map),
@@ -578,6 +733,13 @@ int main(int argc, char** argv) {
         Uint64 last_regen = 0;
         Cell hover{};
         SubCell probe_at{};
+        // Pathfinding (#11): build mode, what it would place, the route lines, the hovered walker.
+        BuildMode build = BuildMode::Off;
+        SubCell build_at{};
+        bool routes_shown = opts.routes;
+        int hover_walker = -1;
+        float right_down_x = 0.0f; // where the right button went down: a click removes a block,
+        float right_down_y = 0.0f; // a drag pans
 
         pixeltd::FixedStep step(kTickNs, kMaxTicksPerFrame);
         Uint64 last = SDL_GetTicksNS();
@@ -621,6 +783,24 @@ int main(int argc, char** argv) {
                         cam = centred_on(core_rect(world.map), screen.view);
                     } else if (e.key.key == SDLK_P) {
                         probe_mode = !probe_mode;
+                        if (probe_mode) {
+                            build = BuildMode::Off;
+                        }
+                    } else if (e.key.key == SDLK_B) {
+                        build = build == BuildMode::Off     ? BuildMode::Light
+                                : build == BuildMode::Light ? BuildMode::Heavy
+                                                            : BuildMode::Off;
+                        if (build != BuildMode::Off) {
+                            probe_mode = false;
+                        }
+                    } else if (e.key.key == SDLK_E) {
+                        if ((e.key.mod & SDL_KMOD_SHIFT) != 0) {
+                            world.sim.set_stream(!world.sim.stream());
+                        } else {
+                            world.sim.send_walkers();
+                        }
+                    } else if (e.key.key == SDLK_R) {
+                        routes_shown = !routes_shown;
                     } else if (e.key.key == SDLK_F) {
                         view.set_fog_shown(!view.fog_shown());
                     } else if (e.key.key == SDLK_O) {
@@ -666,6 +846,24 @@ int main(int argc, char** argv) {
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     if (probe_mode && e.button.button == SDL_BUTTON_LEFT) {
                         place_probe(world, view, probe_at);
+                    } else if (build != BuildMode::Off && e.button.button == SDL_BUTTON_LEFT) {
+                        (void)place_block(world, build_at,
+                                          build == BuildMode::Light ? BlockKind::Light
+                                                                    : BlockKind::Heavy);
+                    } else if (e.button.button == SDL_BUTTON_RIGHT) {
+                        right_down_x = e.button.x;
+                        right_down_y = e.button.y;
+                    }
+                    break;
+                case SDL_EVENT_MOUSE_BUTTON_UP:
+                    // In build mode, a right click (not a drag) removes the block under it.
+                    if (build != BuildMode::Off && e.button.button == SDL_BUTTON_RIGHT &&
+                        std::abs(e.button.x - right_down_x) < 4.0f &&
+                        std::abs(e.button.y - right_down_y) < 4.0f) {
+                        const float k = screen.k();
+                        const int wx = cam.x + static_cast<int>(e.button.x * density / k);
+                        const int wy = cam.y + static_cast<int>(e.button.y * density / k);
+                        world.sim.remove_block_at({wx / kSubPx, wy / kSubPx});
                     }
                     break;
                 default:
@@ -727,6 +925,9 @@ int main(int argc, char** argv) {
                     }
                 }
                 cam = clamp_camera({cam.x + dx, cam.y + dy}, screen.view);
+                // The walkers, blocks and core (#11): routes first, timed when they're rebuilt.
+                update_routes(world);
+                world.sim.tick();
             }
 
             // The world pixel under the cursor, the cell it's in, and in probe mode the probe's
@@ -738,6 +939,18 @@ int main(int argc, char** argv) {
             const int half = kLightSub * kSubPx / 2;
             probe_at =
                 SubCell{(wx - half + kSubPx / 2) / kSubPx, (wy - half + kSubPx / 2) / kSubPx};
+            const BlockKind build_kind =
+                build == BuildMode::Heavy ? BlockKind::Heavy : BlockKind::Light;
+            build_at = block_under(wx, wy, build_kind);
+            // The walker under the cursor, if it can be seen there.
+            hover_walker = world.sim.walker_at({wx, wy});
+            if (hover_walker >= 0 && view.fog_shown() && world.map.core) {
+                const PointPx c =
+                    world.sim.walkers()[static_cast<std::size_t>(hover_walker)].centre();
+                if (!world.fog.explored({c.x / kCellPx, c.y / kCellPx})) {
+                    hover_walker = -1;
+                }
+            }
 
             // The tuning panel: a frame of UI, then regenerate if it changed something.
             ImGui_ImplSDLRenderer3_NewFrame();
@@ -749,7 +962,11 @@ int main(int argc, char** argv) {
                     10.0f * static_cast<float>(pixel_perfect(screen.zoom)
                                                    ? screen.zoom.num
                                                    : std::max(1, screen.out_h / kStandardViewH));
-                const auto change = panel.draw(world.params, seed, world.stats, top * 2.0f);
+                const auto change =
+                    panel.draw(world.params, seed, world.stats, top * 2.0f, world.sim_params);
+                if (panel.sim_changed()) {
+                    world.sim.set_params(world.sim_params); // no new map: walkers carry on
+                }
                 // A set value regenerates now; a slider being dragged at most every 120 ms (a
                 // map takes about 150 ms to generate).
                 regen_pending = regen_pending || change == game::TuningPanel::Change::Preview;
@@ -773,20 +990,28 @@ int main(int argc, char** argv) {
             SDL_SetRenderTarget(renderer, screen.target);
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);
-            view.draw(xf, screen.view, world.fog);
+            view.draw(xf, screen.view, world.fog, world.sim);
             for (const SubCell c : world.probes) {
                 view.draw_probe(xf, c, kProbeColour);
+            }
+            if (routes_shown) {
+                view.draw_routes(xf, world.fog, world.sim);
             }
             if (probe_mode) {
                 view.draw_probe_preview(xf, world.map, probe_at, probe_fits(world, probe_at),
                                         world.probe_range_px());
+            }
+            const char* refusal = nullptr;
+            if (build != BuildMode::Off) {
+                refusal = block_refusal(world, build_at, build_kind);
+                view.draw_block_preview(xf, build_at, build_kind, refusal == nullptr);
             }
             // The HUD at the standard view's text size: scaled up in the window-sized target.
             const int hud = crisp ? 1 : std::max(1, screen.out_h / kStandardViewH);
             SDL_SetRenderScale(renderer, static_cast<float>(hud), static_cast<float>(hud));
             draw_hud(renderer, world, screen,
                      static_cast<float>(crisp ? screen.view.w : screen.out_w / hud), hover,
-                     probe_mode, view.overlay(), view.fog_shown());
+                     probe_mode, view.overlay(), view.fog_shown(), build, refusal, hover_walker);
             SDL_SetRenderScale(renderer, 1.0f, 1.0f);
 
             ++frame;
