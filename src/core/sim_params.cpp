@@ -15,6 +15,14 @@ void fit(int& v, int lo, int hi, int& changed) {
     }
 }
 
+void fit(TowerParams& t, int& changed) {
+    fit(t.range_px, 8, 960, changed);
+    fit(t.damage, 1, 100000, changed);
+    fit(t.fire_interval_ms, 16, 60000, changed);
+    fit(t.shot_speed_px_s, 30, 3000, changed);
+    fit(t.health, 1, 1000000, changed);
+}
+
 } // namespace
 
 int validate(SimParams& p) noexcept {
@@ -31,6 +39,9 @@ int validate(SimParams& p) noexcept {
     fit(p.marsh_speed_pct, 10, 100, changed);
     fit(p.shallow_speed_pct, 10, 100, changed);
     fit(p.stream_interval_ms, 100, 60000, changed);
+    fit(p.light_tower, changed);
+    fit(p.heavy_tower, changed);
+    fit(p.route_delay_ticks, 0, 120, changed);
     return changed;
 }
 

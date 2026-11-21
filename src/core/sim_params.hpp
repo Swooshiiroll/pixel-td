@@ -5,8 +5,19 @@
 
 namespace pixeltd {
 
-// Every number the walkers, blocks and core use in phase 1 of pathfinding and mazing (#11;
-// design/pathfinding.md). All are (start) values, tuned live in the tuning panel.
+// A test tower's numbers. Sight is the same as range.
+struct TowerParams {
+    int range_px = 72;
+    int damage = 10;            // per shot
+    int fire_interval_ms = 500; // between shots
+    int shot_speed_px_s = 480;
+    int health = 200;
+
+    friend constexpr bool operator==(const TowerParams&, const TowerParams&) = default;
+};
+
+// Every number the walkers, blocks, test towers and core use (pathfinding and mazing, #11;
+// design/pathfinding.md and design/test-arena.md). All are (start) values, tuned live.
 struct SimParams {
     int walker_speed_px_s = 32;   // on open ground: 2 cells a second
     int walker_health = 100;      //
@@ -21,6 +32,15 @@ struct SimParams {
     int marsh_speed_pct = 75;      // -25%
     int shallow_speed_pct = 65;    // -35%
     int stream_interval_ms = 3000; // the stream sends one walker per spawn this often
+
+    // The arena's placeholder test towers (#11 phase 2; design/test-arena.md): blocks that shoot.
+    TowerParams light_tower{72, 10, 500, 480, 200};
+    TowerParams heavy_tower{120, 40, 1500, 240, 600};
+
+    // Routes are rebuilt in the background after a change and used from this many ticks later
+    // (the sim waits for the build if it isn't done by then). 0 rebuilds on the sim's own thread at
+    // the start of the next tick.
+    int route_delay_ticks = 20;
 
     friend constexpr bool operator==(const SimParams&, const SimParams&) = default;
 };

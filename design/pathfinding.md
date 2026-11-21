@@ -3,7 +3,8 @@
 Part of v0.1 step 2 ([game.md](game.md), v0.1 build order), issue #11. Enemies find their own way
 from the spawns to the core, and what you build shapes their route. This doc covers **phase 1**:
 placeholder walkers, blocks to build mazes with, and the routes. **Phase 2**, the test arena's
-tools (spawn any wave, pause and step, readouts, hot-reloaded data), gets its own question round.
+tools (test towers, waves, pause and step, readouts, live tuning, layouts, and background route
+builds), is in [test-arena.md](test-arena.md).
 
 ## Purpose
 
@@ -67,6 +68,7 @@ it hits the core and is removed.
 - **Movement carries over:** what's left of a tick's movement continues past each node, so walkers don't lose speed at every node.
 - **Breaking:** on the breach route, if the next node is in a block, the walker stops and attacks that block. When the block breaks, the fields are rebuilt.
 - **When the fields rebuild** (a block placed, removed or broken, or the slowing changed), every walker picks its next step again.
+- **Rebuilds run in the background** (phase 2, [test-arena.md](test-arena.md)): a change on tick T is rebuilt on a worker thread and used from tick T + `route_delay_ticks` (20, start). Until then, a walker whose next step is into a new block waits (state Waiting).
 
 **The sim** (`src/core/sim.*`, `flow.*`, `sim_params.*`):
 - integer only and ticked at 60 Hz;
@@ -99,14 +101,11 @@ it hits the core and is removed.
   - the stream's timing;
   - the same commands give the same state;
   - random valid numbers never break it.
-- **Speed** (manual bench, `route bench`): a tick with 500 walkers takes about 0.02 ms. A route rebuild takes about **100-135 ms** on ANODE-MGMT (target 60 ms; see open question 1).
+- **Speed** (manual bench, `route bench`): a tick with 500 walkers takes about 0.02 ms. A route rebuild takes about **100-135 ms** on ANODE-MGMT (target 60 ms). Phase 2 moved rebuilds off the sim's thread (open question 1).
 
 ## Open questions
 
-1. **Rebuild time.** A full rebuild of the open field (2 million nodes) takes about 100-135 ms on ANODE-MGMT, so placing a block is a short hitch. Options:
-   - keep it for phase 1;
-   - rebuild only the part of the field a change affects (incremental);
-   - rebuild in the background and apply it at a fixed tick (keeps determinism).
+1. ~~**Rebuild time.**~~ **Resolved (owner, 2026-11-20): rebuild in the background** and use the result at a fixed tick, which keeps runs repeatable ([test-arena.md](test-arena.md)). A rebuild still takes about 100-135 ms; making it incremental stays an option if the 333 ms delay ever feels slow.
 2. Routing per enemy type (runners, brutes, flyers), with the enemy design.
 3. Walkers bumping into each other, and how crowds squeeze through gaps.
 4. Building on unexplored ground ([world.md](world.md), open question 2): refusing it because a walker is there would give the walker away.
