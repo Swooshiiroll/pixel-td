@@ -11,3 +11,4 @@ Each doc has: purpose, rules and numbers, interactions, UI, edge cases, scope, a
 | [game.md](game.md) | Overview: run structure, view, art, the tower design process, v0.1 build order |
 | [world.md](world.md) | World layout and the map generator: grid, terrain, core zone, paths, line of sight, fog, camera |
 | [towers.md](towers.md) | Tower system: chassis + weapon + module, evolution, gold Mk upgrades, draft, swaps |
+| [pathfinding.md](pathfinding.md) | Enemy pathfinding and mazing: flow fields on the subgrid, slow ground, breaking through, placeholder walkers and blocks (#11) |

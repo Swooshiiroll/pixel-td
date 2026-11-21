@@ -6,6 +6,7 @@ Pixel TD is a codename; the real name comes later.
 Big systems have their own docs:
 - [world.md](world.md): world layout and the map generator.
 - [towers.md](towers.md): the tower system.
+- [pathfinding.md](pathfinding.md): enemy pathfinding and mazing (#11).
 - `test-arena.md`: the test arena and live tuning (not written yet).
 
 ## Purpose
@@ -85,9 +86,10 @@ real map generator, so the generator comes first.
    - line of sight past rock, and circular range;
    - fog;
    - the camera.
-2. **Test arena + live tuning** (`test-arena.md`), together with **enemy pathfinding and mazing**
-   (issue #11): enemies find their own way, and towers shape the route. Both still to be designed
-   in their own question rounds.
+2. **Enemy pathfinding and mazing** ([pathfinding.md](pathfinding.md), issue #11), then the
+   **test arena + live tuning** (`test-arena.md`): enemies find their own way, and towers shape the
+   route. Phase 1 (placeholder walkers, blocks, routes, breaking through) is designed; the arena
+   tools get their own question round.
 3. **First parts**, designed by pitch and pick and tuned in the arena ([towers.md](towers.md)).
 4. **Minimal run loop:** waves, the draft, gold and the core falling.
 

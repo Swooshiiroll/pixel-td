@@ -79,13 +79,13 @@ comes from the style board. Every cell has:
 | | Walk | Build | Sight and direct fire |
 |---|---|---|---|
 | Soil, rich soil, sand, gravel | yes | yes | pass |
-| Mud, marsh | yes (will slow enemies) | no | pass |
-| Shallow water | yes (will slow enemies) | no | pass |
+| Mud, marsh | yes (mud -20%, marsh -25% speed) | no | pass |
+| Shallow water | yes (-35% speed) | no | pass |
 | Deep water | no | no | pass |
-| Tree (on soil) | yes | no | pass |
+| Tree (on soil) | yes (-15% speed) | no | pass |
 | Rock | no | no | blocked (**lobbed shots arc over**) |
 
-"Will slow enemies" waits for the enemy design (open question 4).
+Slowing: start values from the pathfinding round ([pathfinding.md](pathfinding.md), #11).
 
 **How it's made (start values, all tunable in the panel and saved in presets):**
 - **Mountains:** about **20%** of the map, **mostly near the edges** (the noise gets a bias that
@@ -156,18 +156,17 @@ first build phase.
 ### Enemies and routes
 
 There's **no generated path**. Enemies find their own way from the spawns to the core, and your
-towers shape the route. The details have their own design doc, designed and built with the test
-arena (issue #11). Decided so far:
+towers shape the route. The details are in [pathfinding.md](pathfinding.md) (#11):
 
-- **Mazing:** towers occupy ground, and enemies route around them.
+- **Mazing:** towers occupy ground, and enemies route around them, by the fastest route.
 - **Sealed in:** if your towers cut a spawn off from the core, enemies **break towers** to get
-  through. Placements are never refused for blocking.
-- **The routing rule is set per enemy type** (for example, runners take the shortest path), as
-  part of the enemy design.
-- **Gaps:** enemies fit through any 1-cell (16 px) gap. Pathfinding runs on the 16 px cells, and a
-  tower blocks every cell its footprint touches, so the 8 px gaps the subgrid allows aren't
-  walkable (open question 4).
-- **Movement:** rock and deep water block it; shallow water, mud and marsh will slow it.
+  through, where it's cheapest. Placements are never refused for blocking.
+- **Gaps:** enemies are 16 px across and route on the 8 px subgrid, so any 16 px gap is walkable
+  wherever it sits, and an 8 px gap isn't.
+- **Movement:** rock and deep water block it. Shallow water slows it by 35%, marsh by 25%, mud
+  by 20% and trees by 15% (start values).
+- **The routing rule per enemy type** (for example, runners take the shortest path) comes with
+  the enemy design.
 
 ### Building
 
@@ -345,9 +344,5 @@ All in `src/core`, headless, in doctest:
 2. For the arena or tower round: refusing a tower on unexplored ground (because a spawn or an
    enemy is there) would give its position away. Should building on unexplored ground be allowed,
    refused, or allowed with that leak accepted?
-3. For the pathfinding round (#11): towers sit on the 8 px subgrid but enemies path on 16 px
-   cells, so a tower blocks every cell it touches and 8 px gaps between towers aren't walkable.
-   Keep that, or path on the subgrid?
-4. With the enemy design: how much shallow water, mud and marsh slow enemies (#32 says they will).
 
 The remaining numbers are **(start)** values to tune in the arena.
